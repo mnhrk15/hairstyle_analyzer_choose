@@ -49,6 +49,8 @@ config/secrets.yaml
 data/raw/
 data/processed/
 models/trained/
+cache/
+output/
 
 # Jupyter Notebook
 .ipynb_checkpoints

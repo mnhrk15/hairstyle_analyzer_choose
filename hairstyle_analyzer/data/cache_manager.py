@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Union, TypeVar, Generic, Callable
 from datetime import datetime, timedelta
 
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
 
 from .models import CacheEntry, CacheConfig
 from .interfaces import CacheManagerProtocol
@@ -22,6 +22,19 @@ from ..utils.errors import AppError, with_error_handling
 
 
 T = TypeVar('T')
+
+
+# カスタムJSONエンコーダ - Pydanticモデルをシリアライズするために使用
+class PydanticJSONEncoder(json.JSONEncoder):
+    """PydanticモデルをJSONシリアライズするためのカスタムエンコーダ"""
+    def default(self, obj):
+        if isinstance(obj, BaseModel):
+            return obj.model_dump()
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class CacheManager(CacheManagerProtocol):
@@ -87,15 +100,13 @@ class CacheManager(CacheManagerProtocol):
     @with_error_handling(AppError, "キャッシュファイルの保存に失敗しました")
     def _save_cache(self) -> None:
         """
-        現在のキャッシュ状態をファイルに保存します。
+        キャッシュデータをファイルに保存します。
         """
-        # キャッシュディレクトリが存在することを確認
-        cache_dir = self.cache_file_path.parent
-        if not cache_dir.exists():
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        
         try:
-            # キャッシュデータを辞書形式に変換
+            # ディレクトリが存在しない場合は作成
+            os.makedirs(self.cache_file_path.parent, exist_ok=True)
+            
+            # キャッシュデータをdict形式に変換
             cache_data = {}
             for key, entry in self.cache.items():
                 cache_data[key] = {
@@ -107,7 +118,7 @@ class CacheManager(CacheManagerProtocol):
             # 一時ファイルに書き込み
             temp_file = self.cache_file_path.with_suffix('.tmp')
             with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+                json.dump(cache_data, f, ensure_ascii=False, indent=2, cls=PydanticJSONEncoder)
             
             # 一時ファイルを正規のファイルに置き換え
             if temp_file.exists():
