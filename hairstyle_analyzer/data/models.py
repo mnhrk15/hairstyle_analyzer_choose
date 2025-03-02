@@ -90,6 +90,8 @@ class GeminiConfig(BaseModel):
     fallback_model: str = Field(default="gemini-2.0-flash-lite", description="フォールバックモデル")
     max_tokens: int = Field(default=300, description="生成する最大トークン数")
     temperature: float = Field(default=0.7, description="生成の温度パラメータ")
+    max_retries: int = Field(default=3, description="最大リトライ回数")
+    retry_delay: float = Field(default=1.0, description="リトライ間隔（秒）")
     prompt_template: str = Field(description="プロンプトテンプレート")
     attribute_prompt_template: str = Field(description="属性分析用プロンプトテンプレート")
     stylist_prompt_template: str = Field(description="スタイリスト選択用プロンプトテンプレート")

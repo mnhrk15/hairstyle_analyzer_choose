@@ -53,13 +53,20 @@ AI-powered hairstyle image analysis and title generation system. This tool analy
    source venv/bin/activate
    ```
 
-### Configuration
+### API Key Setup
 
-1. Create a `.env` file in the project root directory with your Gemini API key:
+This application requires a Google Gemini API key to run.
+
+1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
+2. Create a `.env` file in the project root directory with your Gemini API key:
    ```
    GEMINI_API_KEY=your_api_key_here
    ```
+   You can also copy and edit the provided `.env.example` file.
 
+### Configuration
+
+1. Configure the application settings in `config/config.yaml` (sample configuration file provided).
 2. Prepare the template CSV file in `assets/templates/` directory (sample template file provided).
 
 ### Running the Application
@@ -112,6 +119,18 @@ hairstyle_analyzer/
 Run unit tests:
 ```
 pytest tests/
+```
+
+### Running Examples
+
+Try the example scripts to see the functionality in action:
+
+```
+# Template and cache management demo
+python examples/demo_template_cache.py
+
+# Gemini API integration demo (requires API key)
+python examples/demo_gemini_service.py
 ```
 
 ## License
