@@ -1,0 +1,145 @@
+# ヘアスタイル画像解析システム設定ファイル
+
+# キャッシュ設定
+cache:
+  ttl_days: 30          # キャッシュ有効期限（日数）
+  max_size: 10000       # 最大キャッシュエントリ数
+
+# Gemini API設定
+gemini:
+  model: "gemini-2.0-flash"  # 使用するGeminiモデル
+  fallback_model: "gemini-2.0-flash-lite"  # フォールバックモデル
+  max_tokens: 300       # 生成する最大トークン数
+  temperature: 0.7      # 生成の温度パラメータ
+  # プロンプトテンプレート
+  prompt_template: |
+    この画像のヘアスタイルを分析し、以下の情報をJSON形式で返してください:
+
+    1. カテゴリ (以下から1つだけ選択してください):
+    {categories}
+
+    2. 特徴:
+       - 髪色: 色調や特徴を詳しく
+       - カット技法: レイヤー、グラデーション、ボブなど
+       - スタイリング: ストレート、ウェーブ、パーマなど
+       - 印象: フェミニン、クール、ナチュラルなど
+
+    必ず以下のJSON形式で出力してください:
+    {
+      "category": "カテゴリ名",
+      "features": {
+        "color": "詳細な色の説明",
+        "cut_technique": "カット技法の説明",
+        "styling": "スタイリング方法の説明",
+        "impression": "全体的な印象"
+      },
+      "keywords": ["キーワード1", "キーワード2", "キーワード3"]
+    }
+  # 属性分析用プロンプトテンプレート
+  attribute_prompt_template: |
+    この画像のヘアスタイルの性別と髪の長さを判定してください。
+
+    性別は「レディース」または「メンズ」のいずれかを選択してください。
+    髪の長さは以下の選択肢から最も適切なものを選んでください:
+    {length_choices}
+
+    必ず以下のJSON形式で出力してください:
+    {
+      "sex": "性別",
+      "length": "髪の長さ"
+    }
+  # スタイリスト選択用プロンプトテンプレート
+  stylist_prompt_template: |
+    以下のスタイリスト情報リストから、この画像のヘアスタイルに最も適したスタイリストを1人選んでください。
+
+    スタイリスト情報:
+    {stylists}
+
+    ヘアスタイルの情報:
+    カテゴリ: {category}
+    特徴:
+    - 髪色: {color}
+    - カット技法: {cut_technique}
+    - スタイリング: {styling}
+    - 印象: {impression}
+
+    必ず以下のJSON形式で出力してください:
+    {
+      "stylist_name": "選んだスタイリスト名"
+    }
+  # クーポン選択用プロンプトテンプレート
+  coupon_prompt_template: |
+    以下のクーポンリストから、この画像のヘアスタイルに最も適したクーポンを1つ選んでください。
+
+    クーポンリスト:
+    {coupons}
+
+    ヘアスタイルの情報:
+    カテゴリ: {category}
+    特徴:
+    - 髪色: {color}
+    - カット技法: {cut_technique}
+    - スタイリング: {styling}
+    - 印象: {impression}
+
+    必ず以下のJSON形式で出力してください:
+    {
+      "coupon_name": "選んだクーポン名"
+    }
+  # 髪の長さの選択肢
+  length_choices:
+    - ベリーショート
+    - ショート
+    - ミディアム
+    - セミロング
+    - ロング
+    - ヘアセット
+    - ミセス
+
+# スクレイパー設定
+scraper:
+  base_url: "https://beauty.hotpepper.jp/slnH000000000/"  # スクレイピング対象のベースURL
+  stylist_link_selector: "p.mT10.fs16.b > a[href*='/stylist/T']"  # スタイリストリンクのセレクタ
+  stylist_name_selector: ".fs16.b"  # スタイリスト名のセレクタ
+  stylist_description_selector: ".fgPink"  # スタイリスト説明のセレクタ
+  coupon_class_name: "couponMenuName"  # クーポン名のクラス名
+  coupon_page_parameter_name: "PN"  # クーポンページパラメータ名
+  coupon_page_start_number: 2  # クーポンページ開始番号
+  coupon_page_limit: 3  # クーポンページ数上限
+  timeout: 10  # リクエストタイムアウト（秒）
+  max_retries: 3  # 最大リトライ回数
+  retry_delay: 1  # リトライ間隔（秒）
+
+# Excel出力設定
+excel:
+  headers:  # Excel出力のヘッダー定義
+    A: "スタイリスト名"
+    B: "クーポン名"
+    C: "コメント"
+    D: "スタイルタイトル"
+    E: "性別"
+    F: "長さ"
+    G: "スタイルメニュー"
+    H: "ハッシュタグ"
+    I: "画像ファイル名"
+
+# 処理設定
+processing:
+  batch_size: 5  # バッチサイズ
+  api_delay: 1.0  # API呼び出し間の遅延（秒）
+  max_retries: 3  # 最大リトライ回数
+  retry_delay: 1.0  # リトライ間隔（秒）
+  memory_per_image_mb: 5  # 画像あたりのメモリ使用量（MB）
+
+# パス設定
+paths:
+  image_folder: "./assets/samples"  # 画像フォルダのパス
+  template_csv: "./assets/templates/template.csv"  # テンプレートCSVファイルのパス
+  output_excel: "./output/style_titles.xlsx"  # 出力Excelファイルのパス
+  cache_file: "./cache/analysis_cache.json"  # キャッシュファイルのパス
+  log_file: "./logs/app.log"  # ログファイルのパス
+
+# ロギング設定
+logging:
+  log_file: "./logs/app.log"  # ログファイルのパス
+  log_level: "INFO"  # ログレベル

@@ -1,0 +1,27 @@
+# UI
+streamlit>=1.41.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+pydantic>=2.4.0
+
+# Image processing
+pillow>=10.0.0
+
+# API integration
+google-generativeai>=0.6.0
+python-dotenv>=1.0.0
+
+# Web scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Excel handling
+openpyxl>=3.1.0
+
+# Utils
+tqdm>=4.65.0
+pyyaml>=6.0.0
+psutil>=5.9.0
