@@ -295,21 +295,21 @@ class ScraperService:
         except Exception as e:
             raise ParseError(f"HTML解析エラー: {str(e)}")
 
-    async def get_stylist_links(self, salon_url: str) -> List[str]:
+    async def get_stylist_links(self, salon_url: str) -> List[dict]:
         """
-        サロンページからスタイリストへのリンクを取得します。
+        サロンページからスタイリスト情報とリンクを取得します。
         
         Args:
             salon_url: サロンページのURL
             
         Returns:
-            スタイリストページへのURLリスト
+            スタイリスト情報の辞書リスト（名前、リンク、得意技術、説明文）
             
         Raises:
             NetworkError: ネットワーク関連のエラーが発生した場合
             ParseError: HTML解析中にエラーが発生した場合
         """
-        self.logger.info(f"サロンページからスタイリストリンクを取得中: {salon_url}")
+        self.logger.info(f"サロンページからスタイリスト情報を取得中: {salon_url}")
         
         # URLの検証
         if not await self.validate_url(salon_url):
@@ -320,78 +320,73 @@ class ScraperService:
         page_content = await self._rate_limited_request(stylist_page_url)
         soup = self._parse_html(page_content)
         
-        # スタイリストリンクの検索
-        stylist_links = []
+        # スタイリスト情報の取得
+        stylist_info_list = []
         try:
-            links = soup.select(self.config.stylist_link_selector)
-            base_url = salon_url.rstrip('/')
+            # テーブルの行を取得
+            stylist_rows = soup.select("table.w756 tr")
             
-            for link in links:
-                href = link.get('href')
-                if href:
-                    full_url = urljoin(base_url, href)
-                    stylist_links.append(full_url)
+            for row in stylist_rows:
+                # 各セルを処理
+                cells = row.select("td.vaT")
+                for cell in cells:
+                    # 名前
+                    name_elem = cell.select_one("p.mT10.fs16.b > a")
+                    if not name_elem:
+                        continue
+                    
+                    name = name_elem.text.strip()
+                    link = name_elem.get('href', '')
+                    if link:
+                        link = urljoin(salon_url, link)
+                    
+                    # 得意技術
+                    specialties_elem = cell.select_one("div.mT5.fs10 > span.fgPink")
+                    specialties = specialties_elem.text.strip() if specialties_elem else ""
+                    
+                    # 説明文
+                    description_elem = cell.select_one("div.mT5.fs10.hMin30")
+                    description = description_elem.text.strip() if description_elem else ""
+                    
+                    stylist_info = {
+                        "name": name,
+                        "link": link,
+                        "specialties": specialties,
+                        "description": description
+                    }
+                    
+                    stylist_info_list.append(stylist_info)
             
-            self.logger.info(f"{len(stylist_links)}人のスタイリストリンクを取得しました")
-            return stylist_links
+            self.logger.info(f"{len(stylist_info_list)}人のスタイリスト情報を取得しました")
+            return stylist_info_list
         except Exception as e:
-            raise ParseError(f"スタイリストリンク取得エラー: {str(e)}", {
-                "url": salon_url,
-                "selector": self.config.stylist_link_selector
+            raise ParseError(f"スタイリスト情報取得エラー: {str(e)}", {
+                "url": salon_url
             })
 
-    async def get_stylist_info(self, stylist_url: str) -> StylistInfo:
+    async def get_stylist_info(self, stylist_data: dict) -> StylistInfo:
         """
-        スタイリストページから詳細情報を取得します。
+        スタイリスト情報を作成します。
         
         Args:
-            stylist_url: スタイリストページのURL
+            stylist_data: スタイリスト情報の辞書
             
         Returns:
             スタイリスト情報
-            
-        Raises:
-            NetworkError: ネットワーク関連のエラーが発生した場合
-            ParseError: HTML解析中にエラーが発生した場合
         """
-        self.logger.info(f"スタイリスト情報を取得中: {stylist_url}")
+        self.logger.info(f"スタイリスト情報を作成: {stylist_data['name']}")
         
-        # ページの取得（レート制限・キャッシュ機能付き）
-        page_content = await self._rate_limited_request(stylist_url)
-        soup = self._parse_html(page_content)
+        stylist_info = StylistInfo(
+            name=stylist_data["name"],
+            specialties=stylist_data["specialties"],
+            description=stylist_data["description"]
+        )
         
-        try:
-            # スタイリスト名の取得
-            name_element = soup.select_one(self.config.stylist_name_selector)
-            name = name_element.text.strip() if name_element else "名前不明"
-            
-            # スタイリスト説明の取得
-            desc_element = soup.select_one(self.config.stylist_description_selector)
-            description = desc_element.text.strip() if desc_element else ""
-            
-            # 役職の取得（存在する場合）
-            position = None
-            position_element = soup.find('p', class_='fs12')
-            if position_element:
-                position = position_element.text.strip()
-            
-            stylist_info = StylistInfo(
-                name=name,
-                description=description,
-                position=position
-            )
-            
-            self.logger.info(f"スタイリスト情報を取得しました: {name}")
-            return stylist_info
-        except Exception as e:
-            raise ParseError(f"スタイリスト情報取得エラー: {str(e)}", {
-                "url": stylist_url
-            })
+        return stylist_info
 
     async def get_coupons(self, salon_url: str) -> List[CouponInfo]:
         """
         サロンページからクーポン情報を取得します。
-        複数ページにわたるクーポン情報も取得します。
         
         Args:
             salon_url: サロンページのURL
@@ -409,98 +404,135 @@ class ScraperService:
         if not await self.validate_url(salon_url):
             raise ValidationError(f"無効なサロンURL: {salon_url}")
         
-        # クーポンページのURL作成
-        coupon_url = salon_url.rstrip('/') + "/coupon/"
+        # クーポンページのURL
+        if not salon_url.endswith('/'):
+            salon_url += '/'
+        coupon_page_url = salon_url + "coupon/"
         
-        # 1ページ目の取得
-        coupons = await self._get_coupons_from_page(coupon_url)
-        all_coupons = coupons.copy()
+        # 実際のリクエストを行う前にURLが有効かチェック
+        self.logger.info(f"クーポンページURL: {coupon_page_url}")
         
-        # 2ページ目以降の取得（設定された上限まで）
-        page_tasks = []
-        for page_num in range(self.config.coupon_page_start_number, self.config.coupon_page_limit + 1):
-            # ページパラメータを追加したURL
-            next_page_url = self._add_page_param(coupon_url, page_num)
-            page_tasks.append(self._get_coupons_from_page(next_page_url))
+        # 全クーポンを格納するリスト
+        all_coupons = []
         
-        # 並列処理で複数ページを取得
-        if page_tasks:
-            results = await asyncio.gather(*page_tasks, return_exceptions=True)
+        # 最初のページを処理
+        page_content = await self._rate_limited_request(coupon_page_url)
+        soup = self._parse_html(page_content)
+        
+        # 現在のページからクーポンを取得
+        coupons = self._extract_coupons_from_page(soup)
+        all_coupons.extend(coupons)
+        
+        # ページネーションを確認
+        page_links = soup.select("p.pa.bottom0.right0 a")
+        max_page = 1
+        
+        for link in page_links:
+            if "次へ" in link.text:
+                href = link.get("href", "")
+                if "PN" in href:
+                    # ページネーションのパラメータを取得
+                    match = re.search(r"PN(\d+)", href)
+                    if match:
+                        max_page = int(match.group(1))
+                        break
+        
+        # 2ページ目以降を処理
+        for page_num in range(2, min(max_page + 1, self.config.coupon_page_limit + 1)):
+            next_page_url = f"{coupon_page_url}PN{page_num}.html"
             
-            for result in results:
-                if isinstance(result, Exception):
-                    self.logger.warning(f"クーポンページ取得エラー: {str(result)}")
-                    continue
-                    
-                if result:  # 結果がある場合のみ追加
-                    all_coupons.extend(result)
+            try:
+                page_content = await self._rate_limited_request(next_page_url)
+                soup = self._parse_html(page_content)
+                
+                # 現在のページからクーポンを取得
+                coupons = self._extract_coupons_from_page(soup)
+                all_coupons.extend(coupons)
+                
+            except Exception as e:
+                self.logger.warning(f"ページ {page_num} の取得に失敗: {str(e)}")
+                break
         
         self.logger.info(f"{len(all_coupons)}件のクーポン情報を取得しました")
         return all_coupons
-
-    async def _get_coupons_from_page(self, page_url: str) -> List[CouponInfo]:
+    
+    def _extract_coupons_from_page(self, soup: BeautifulSoup) -> List[CouponInfo]:
         """
-        クーポンページから1ページ分のクーポン情報を取得します。
+        ページからクーポン情報を抽出します。
         
         Args:
-            page_url: クーポンページのURL
+            soup: BeautifulSoupオブジェクト
             
         Returns:
             クーポン情報のリスト
         """
-        try:
-            # ページの取得（レート制限・キャッシュ機能付き）
-            page_content = await self._rate_limited_request(page_url)
-            soup = self._parse_html(page_content)
-            
-            coupons = []
-            # クーポン要素の検索
-            coupon_elements = soup.find_all(class_=self.config.coupon_class_name)
-            
-            for element in coupon_elements:
-                name = element.text.strip()
+        coupons = []
+        
+        # クーポンの各テーブルを取得
+        coupon_tables = soup.select("div.usingPointToggle table.couponTbl")
+        
+        for table in coupon_tables:
+            try:
+                # クーポン名
+                name_elem = table.select_one("p.couponMenuName")
+                name = name_elem.text.strip() if name_elem else "不明なクーポン"
                 
-                # 価格情報の取得（存在する場合）
-                price = None
-                price_element = element.find_next(class_='price')
-                if price_element:
-                    price = price_element.text.strip()
+                # 価格
+                price_elem = table.select_one("span.fs16.fgPink")
+                price_text = price_elem.text.strip() if price_elem else ""
+                # 数字以外の文字を削除して整数に変換
+                price = int(re.sub(r'[^\d]', '', price_text)) if re.search(r'\d', price_text) else 0
                 
-                coupons.append(CouponInfo(
+                # 説明文
+                description_elem = table.select_one("p.fgGray.fs11.wbba")
+                description = description_elem.text.strip() if description_elem else ""
+                
+                # カテゴリー（メニューアイコン）
+                categories = []
+                category_elems = table.select("ul.couponMenuIcons li.couponMenuIcon")
+                for elem in category_elems:
+                    categories.append(elem.text.strip())
+                
+                # 条件
+                conditions = {}
+                
+                # 来店日条件
+                visit_date_dt = table.select_one("dt.mT5.fl.fgPink:-soup-contains('来店日条件')")
+                if visit_date_dt:
+                    visit_date_dd = visit_date_dt.find_next("dd")
+                    if visit_date_dd:
+                        conditions["来店日条件"] = visit_date_dd.text.strip()
+                
+                # 対象スタイリスト
+                stylist_dt = table.select_one("dt.mT5.fl.fgPink:-soup-contains('対象スタイリスト')")
+                if stylist_dt:
+                    stylist_dd = stylist_dt.find_next("dd")
+                    if stylist_dd:
+                        conditions["対象スタイリスト"] = stylist_dd.text.strip()
+                
+                # その他条件
+                other_dt = table.select_one("dt.mT5.fl.fgPink:-soup-contains('その他条件')")
+                if other_dt:
+                    other_dd = other_dt.find_next("dd")
+                    if other_dd:
+                        conditions["その他条件"] = other_dd.text.strip()
+                
+                # クーポン情報を作成
+                coupon = CouponInfo(
                     name=name,
-                    price=price
-                ))
-            
-            return coupons
-        except Exception as e:
-            raise ParseError(f"クーポン情報取得エラー: {str(e)}", {
-                "url": page_url,
-                "class_name": self.config.coupon_class_name
-            })
-
-    def _add_page_param(self, url: str, page_number: int) -> str:
-        """
-        URLにページ番号パラメータを追加します。
+                    price=price,
+                    description=description,
+                    categories=categories,
+                    conditions=conditions
+                )
+                
+                coupons.append(coupon)
+                
+            except Exception as e:
+                self.logger.error(f"クーポン情報の抽出エラー: {str(e)}")
+                continue
         
-        Args:
-            url: 元のURL
-            page_number: ページ番号
-            
-        Returns:
-            ページ番号パラメータが追加されたURL
-        """
-        parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
-        
-        # ページパラメータを追加/更新
-        query_params[self.config.coupon_page_parameter_name] = [str(page_number)]
-        
-        # URLを再構築
-        new_query = urlencode(query_params, doseq=True)
-        new_parts = list(parsed_url)
-        new_parts[4] = new_query
-        
-        return urlunparse(new_parts)
+        return coupons
 
     async def get_all_stylists(self, salon_url: str) -> List[StylistInfo]:
         """
@@ -514,28 +546,20 @@ class ScraperService:
         """
         self.logger.info(f"サロンの全スタイリスト情報を取得中: {salon_url}")
         
-        # スタイリストリンクの取得
-        stylist_links = await self.get_stylist_links(salon_url)
+        # スタイリスト情報の取得
+        stylist_info_list = await self.get_stylist_links(salon_url)
         
-        # 並列処理でスタイリスト情報を取得（コルーチンの数を制限）
-        chunk_size = 5  # 一度に処理するスタイリスト数
+        # スタイリスト情報の作成
+        stylist_info_tasks = [self.get_stylist_info(stylist_info) for stylist_info in stylist_info_list]
+        stylist_infos = await asyncio.gather(*stylist_info_tasks, return_exceptions=True)
+        
+        # エラーをフィルタリング
         all_stylists = []
-        
-        for i in range(0, len(stylist_links), chunk_size):
-            chunk = stylist_links[i:i+chunk_size]
-            tasks = [self.get_stylist_info(link) for link in chunk]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # エラーをフィルタリング
-            for j, result in enumerate(results):
-                if isinstance(result, Exception):
-                    self.logger.error(f"スタイリスト情報取得エラー: {chunk[j]} - {str(result)}")
-                else:
-                    all_stylists.append(result)
-                    
-            # 次のチャンクの前に少し待機
-            if i + chunk_size < len(stylist_links):
-                await asyncio.sleep(1)
+        for stylist_info in stylist_infos:
+            if isinstance(stylist_info, Exception):
+                self.logger.error(f"スタイリスト情報取得エラー: {str(stylist_info)}")
+            else:
+                all_stylists.append(stylist_info)
         
         self.logger.info(f"{len(all_stylists)}人のスタイリスト情報を取得しました")
         return all_stylists

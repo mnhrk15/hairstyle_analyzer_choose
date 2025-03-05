@@ -147,11 +147,35 @@ class ImageAnalyzer:
         
         if not isinstance(results[0], Exception):
             style_result = results[0]
+            # 辞書型の場合はStyleAnalysisに変換
+            if isinstance(style_result, dict):
+                try:
+                    from ..data.models import StyleAnalysis, StyleFeatures
+                    features = StyleFeatures(**style_result.get('features', {}))
+                    style_result = StyleAnalysis(
+                        category=style_result.get('category', ''),
+                        features=features,
+                        keywords=style_result.get('keywords', [])
+                    )
+                except Exception as e:
+                    self.logger.error(f"スタイル分析結果の変換に失敗しました: {e}")
+                    style_result = None
         else:
             self.logger.error(f"スタイル分析エラー: {str(results[0])}")
         
         if not isinstance(results[1], Exception):
             attribute_result = results[1]
+            # 辞書型の場合はAttributeAnalysisに変換
+            if isinstance(attribute_result, dict):
+                try:
+                    from ..data.models import AttributeAnalysis
+                    attribute_result = AttributeAnalysis(
+                        sex=attribute_result.get('sex', ''),
+                        length=attribute_result.get('length', '')
+                    )
+                except Exception as e:
+                    self.logger.error(f"属性分析結果の変換に失敗しました: {e}")
+                    attribute_result = None
         else:
             self.logger.error(f"属性分析エラー: {str(results[1])}")
         

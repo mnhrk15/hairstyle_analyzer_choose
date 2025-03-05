@@ -13,6 +13,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
+import re
 
 import google.generativeai as genai
 from pydantic import ValidationError
@@ -51,6 +52,9 @@ class GeminiService:
         
         # モデルの初期化
         self._init_models()
+        
+        # プロンプトテンプレートの更新
+        self._update_prompt_templates()
         
         self.logger.info(f"GeminiService初期化完了 (モデル: {self.config.model})")
     
@@ -210,10 +214,10 @@ class GeminiService:
     
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
-        JSONレスポンスをパースします。
+        APIレスポンスからJSONデータを抽出します。
         
         Args:
-            response_text: レスポンステキスト
+            response_text: APIレスポンステキスト
             
         Returns:
             パースされたJSONデータ
@@ -222,14 +226,70 @@ class GeminiService:
             GeminiAPIError: JSONのパースに失敗した場合
         """
         try:
-            # JSONとして解析
+            # JSONブロックを抽出
+            json_match = re.search(r'```json\s*([\s\S]*?)\s*```|({[\s\S]*?})', response_text)
+            if json_match:
+                json_str = json_match.group(1) if json_match.group(1) else json_match.group(2)
+                # JSONの修正を試みる
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # コンマの欠落などの一般的なエラーを修正
+                    fixed_json = re.sub(r'"\s*\n\s*}', '",\n}', json_str)
+                    fixed_json = re.sub(r'"\s*\n\s*]', '",\n]', fixed_json)
+                    return json.loads(fixed_json)
+            
+            # JSONブロックが見つからない場合は、テキスト全体をJSONとしてパース
             return json.loads(response_text)
         except json.JSONDecodeError as e:
-            self.logger.error(f"JSONデコードエラー: {e}, レスポンス: {response_text}")
+            self.logger.error(f"JSONパースエラー: {e}, テキスト: {response_text}")
+            
+            # 応急処置: 数字だけの回答の場合
+            if re.match(r'^\s*\d+\s*$', response_text.strip()):
+                number = int(response_text.strip())
+                self.logger.info(f"数字のみの回答を検出: {number}")
+                return {"coupon_number": number}
+            
+            # キーと値のペアを抽出する試み
+            try:
+                # 画像分析結果の場合のフォールバック
+                if "category" in response_text and "features" in response_text:
+                    category_match = re.search(r'"category"\s*:\s*"([^"]+)"', response_text)
+                    color_match = re.search(r'"color"\s*:\s*"([^"]+)"', response_text)
+                    cut_match = re.search(r'"cut_technique"\s*:\s*"([^"]+)"', response_text)
+                    styling_match = re.search(r'"styling"\s*:\s*"([^"]+)"', response_text)
+                    impression_match = re.search(r'"impression"\s*:\s*"([^"]+)"', response_text)
+                    
+                    result = {
+                        "category": category_match.group(1) if category_match else "不明",
+                        "features": {
+                            "color": color_match.group(1) if color_match else "不明",
+                            "cut_technique": cut_match.group(1) if cut_match else "不明",
+                            "styling": styling_match.group(1) if styling_match else "不明",
+                            "impression": impression_match.group(1) if impression_match else "不明"
+                        }
+                    }
+                    self.logger.info("正規表現でJSONデータを抽出しました")
+                    return result
+                
+                # クーポン選択結果の場合のフォールバック
+                coupon_number_match = re.search(r'"coupon_number"\s*:\s*(\d+)', response_text)
+                if coupon_number_match:
+                    coupon_number = int(coupon_number_match.group(1))
+                    reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', response_text)
+                    reason = reason_match.group(1) if reason_match else "理由なし"
+                    
+                    return {
+                        "coupon_number": coupon_number,
+                        "reason": reason
+                    }
+            except Exception as regex_error:
+                self.logger.error(f"正規表現による抽出も失敗: {regex_error}")
+            
             raise GeminiAPIError(
-                f"APIレスポンスのJSONパースに失敗: {str(e)}",
+                f"JSONパースエラー: {str(e)}",
                 error_type="JSON_PARSE_ERROR",
-                details={"response": response_text}
+                details={"response_text": response_text}
             ) from e
     
     @async_with_error_handling(GeminiAPIError, "画像分析に失敗しました")
@@ -345,11 +405,80 @@ class GeminiService:
                 details={"json_data": json_data}
             ) from e
     
+    def _update_prompt_templates(self):
+        """
+        プロンプトテンプレートを更新します。
+        既存のテンプレートがない場合や改善が必要な場合に使用します。
+        """
+        # スタイリスト選択用プロンプトテンプレートの改善
+        improved_stylist_template = """
+        以下の画像のヘアスタイルに最適なスタイリストを選んでください。
+
+        【画像の分析結果】
+        カテゴリ: {category}
+        髪色: {color}
+        カット技法: {cut_technique}
+        スタイリング: {styling}
+        印象: {impression}
+
+        【スタイリスト一覧】
+        {stylists}
+
+        以下の条件を満たすスタイリストを1人だけ選んでください：
+        1. 画像のヘアスタイルを得意としているスタイリスト
+        2. 技術や特徴が画像のヘアスタイルに合っているスタイリスト
+        3. 必ず上記リストに存在するスタイリストを選んでください（存在しない名前は選ばないでください）
+
+        回答は以下の形式でJSON形式で返してください：
+        ```json
+        {{
+          "stylist_name": "選んだスタイリストの名前（正確に一致する名前）",
+          "reason": "選んだ理由の詳細説明"
+        }}
+        """
+
+        # クーポン選択用プロンプトテンプレートの改善
+        improved_coupon_template = """
+        以下の画像のヘアスタイルに最適なクーポンを選んでください。
+
+        【画像の分析結果】
+        カテゴリ: {category}
+        髪色: {color}
+        カット技法: {cut_technique}
+        スタイリング: {styling}
+        印象: {impression}
+
+        【クーポン一覧】
+        {coupons}
+
+        以下の条件を満たすクーポンを1つだけ選んでください：
+        1. 画像のヘアスタイルを実現できるメニューが含まれているクーポン
+        2. 「↓↓↓【★人気クーポンTOP5★】↓↓↓」のような見出しやセパレータはクーポンではありません
+        3. 必ず番号（1〜{coupon_count}の間）で選んでください
+        4. 実際のヘアスタイルに合わせたクーポンを選んでください
+
+        回答は以下の形式でJSON形式で返してください：
+        ```json
+        {{
+          "coupon_number": 選んだクーポンの番号（1〜{coupon_count}の整数）,
+          "reason": "選んだ理由の詳細説明"
+        }}
+        """
+
+        # 現在のテンプレートを更新
+        if hasattr(self.config, 'stylist_prompt_template'):
+            self.config.stylist_prompt_template = improved_stylist_template
+            
+        if hasattr(self.config, 'coupon_prompt_template'):
+            self.config.coupon_prompt_template = improved_coupon_template
+            
+        self.logger.info("プロンプトテンプレートを改善しました")
+    
     @async_with_error_handling(GeminiAPIError, "スタイリスト選択に失敗しました")
     async def select_stylist(self, 
                            image_path: Path, 
                            stylists: List[StylistInfoProtocol], 
-                           analysis: StyleAnalysisProtocol) -> Optional[StylistInfoProtocol]:
+                           analysis: StyleAnalysisProtocol) -> Tuple[Optional[StylistInfoProtocol], Optional[str]]:
         """
         画像に最適なスタイリストを選択します。
         
@@ -359,20 +488,19 @@ class GeminiService:
             analysis: 画像分析結果
             
         Returns:
-            選択されたスタイリスト情報、またはエラー時はNone
+            (選択されたスタイリスト情報, 選択理由)のタプル、またはエラー時は(None, None)
             
         Raises:
             GeminiAPIError: API呼び出しに失敗した場合
-            ImageError: 画像の読み込みや変換に失敗した場合
+            ImageError: 画像が無効な場合
         """
         if not stylists:
             self.logger.warning("スタイリストリストが空です")
-            return None
+            return None, None
         
         # スタイリスト情報のテキスト形式作成
         stylists_str = "\n".join([
-            f"{i+1}. {stylist.name}: {stylist.description}" + 
-            (f" (役職: {stylist.position})" if stylist.position else "")
+            f"{i+1}. {stylist.name}\n   得意な技術・特徴: {stylist.specialties}\n   説明文: {stylist.description}"
             for i, stylist in enumerate(stylists)
         ])
         
@@ -396,16 +524,36 @@ class GeminiService:
         try:
             # スタイリスト名取得
             stylist_name = json_data["stylist_name"]
+            reason = json_data.get("reason", "理由なし")
             
-            # 名前が一致するスタイリストを検索
+            self.logger.info(f"スタイリスト選択理由: {reason}")
+            
+            # 完全一致するスタイリストを検索
             for stylist in stylists:
                 if stylist.name == stylist_name:
                     self.logger.info(f"スタイリスト選択完了: {stylist_name}")
-                    return stylist
+                    return stylist, reason
+            
+            # 完全一致するスタイリストが見つからない場合は部分一致を試みる
+            best_match = None
+            highest_similarity = 0
+            
+            for stylist in stylists:
+                # 名前の一部が含まれているかチェック
+                if stylist_name in stylist.name or stylist.name in stylist_name:
+                    # 単純な文字列の長さの比率で類似度を計算
+                    similarity = min(len(stylist_name), len(stylist.name)) / max(len(stylist_name), len(stylist.name))
+                    if similarity > highest_similarity:
+                        highest_similarity = similarity
+                        best_match = stylist
+            
+            if best_match and highest_similarity > 0.3:  # 30%以上の類似度があれば採用
+                self.logger.info(f"部分一致するスタイリストを選択: {best_match.name} (類似度: {highest_similarity:.2f})")
+                return best_match, reason
             
             self.logger.warning(f"選択されたスタイリスト '{stylist_name}' が見つかりません")
             # 見つからない場合は最初のスタイリストを返す
-            return stylists[0]
+            return stylists[0], f"指定されたスタイリスト '{stylist_name}' が見つからないため、デフォルトのスタイリストを選択しました。"
             
         except (KeyError, ValidationError) as e:
             self.logger.error(f"スタイリスト選択結果のパースエラー: {e}, データ: {json_data}")
@@ -419,7 +567,7 @@ class GeminiService:
     async def select_coupon(self, 
                           image_path: Path, 
                           coupons: List[CouponInfoProtocol], 
-                          analysis: StyleAnalysisProtocol) -> Optional[CouponInfoProtocol]:
+                          analysis: StyleAnalysisProtocol) -> Tuple[Optional[CouponInfoProtocol], Optional[str]]:
         """
         画像に最適なクーポンを選択します。
         
@@ -429,23 +577,30 @@ class GeminiService:
             analysis: 画像分析結果
             
         Returns:
-            選択されたクーポン情報、またはエラー時はNone
+            (選択されたクーポン情報, 選択理由)のタプル、またはエラー時は(None, None)
             
         Raises:
             GeminiAPIError: API呼び出しに失敗した場合
-            ImageError: 画像の読み込みや変換に失敗した場合
+            ImageError: 画像が無効な場合
         """
         if not coupons:
             self.logger.warning("クーポンリストが空です")
-            return None
+            return None, None
         
-        # クーポン情報のテキスト形式作成
+        # クーポン情報のテキスト形式作成（詳細情報と番号を含む）
         coupons_str = "\n".join([
-            f"{i+1}. {coupon.name}" + (f" ({coupon.price})" if coupon.price else "")
+            f"{i+1}. 名前: {coupon.name}\n   価格: {coupon.price}円\n   説明: {coupon.description}\n   カテゴリ: {', '.join(coupon.categories)}\n   条件: {', '.join([f'{k}={v}' for k, v in coupon.conditions.items()])}"
             for i, coupon in enumerate(coupons)
         ])
         
+        # クーポン名と番号のマッピングを作成
+        coupon_map = {i+1: coupon for i, coupon in enumerate(coupons)}
+        
         # プロンプトの作成
+        # 注意: プロンプトテンプレートには以下の内容を含めるべきです
+        # 1. 必ず番号で回答するよう指示
+        # 2. 「↓↓↓【★人気クーポンTOP5★】↓↓↓」のような見出しはクーポンではないことを明示
+        # 3. 実際のヘアスタイルに合わせたクーポンを選ぶよう指示
         prompt = self._format_prompt(
             template=self.config.coupon_prompt_template,
             coupons=coupons_str,
@@ -453,7 +608,8 @@ class GeminiService:
             color=analysis.features.color,
             cut_technique=analysis.features.cut_technique,
             styling=analysis.features.styling,
-            impression=analysis.features.impression
+            impression=analysis.features.impression,
+            coupon_count=len(coupons)
         )
         
         # API呼び出し
@@ -463,18 +619,84 @@ class GeminiService:
         json_data = self._parse_json_response(response_text)
         
         try:
-            # クーポン名取得
-            coupon_name = json_data["coupon_name"]
+            # クーポン番号と選択理由を取得
+            coupon_number = json_data.get("coupon_number")
+            reason = json_data.get("reason", "理由なし")
             
-            # 名前が一致するクーポンを検索
-            for coupon in coupons:
-                if coupon.name == coupon_name:
-                    self.logger.info(f"クーポン選択完了: {coupon_name}")
-                    return coupon
+            self.logger.info(f"クーポン選択理由: {reason}")
             
-            self.logger.warning(f"選択されたクーポン '{coupon_name}' が見つかりません")
-            # 見つからない場合は最初のクーポンを返す
-            return coupons[0]
+            # 番号が文字列の場合は整数に変換
+            if isinstance(coupon_number, str) and coupon_number.isdigit():
+                coupon_number = int(coupon_number)
+            
+            # クーポン番号が有効かチェック
+            if isinstance(coupon_number, int) and coupon_number in coupon_map:
+                selected_coupon = coupon_map[coupon_number]
+                self.logger.info(f"クーポン番号 {coupon_number} が選択されました: {selected_coupon.name}")
+                return selected_coupon, reason
+            
+            # 後方互換性のためにcoupon_nameも確認
+            coupon_name = json_data.get("coupon_name", "")
+            
+            # 数字だけの場合は番号として処理
+            if coupon_name and coupon_name.isdigit() and int(coupon_name) in coupon_map:
+                coupon_number = int(coupon_name)
+                selected_coupon = coupon_map[coupon_number]
+                self.logger.info(f"クーポン番号 {coupon_number} が選択されました: {selected_coupon.name}")
+                return selected_coupon, reason
+            
+            # 「1. 」のような形式の場合も番号として処理
+            if coupon_name:
+                match = re.match(r'^(\d+)[\.\s]', coupon_name)
+                if match and int(match.group(1)) in coupon_map:
+                    coupon_number = int(match.group(1))
+                    selected_coupon = coupon_map[coupon_number]
+                    self.logger.info(f"クーポン番号 {coupon_number} が選択されました: {selected_coupon.name}")
+                    return selected_coupon, reason
+            
+            # 名前が一致するクーポンを検索（完全一致）
+            if coupon_name:
+                for i, coupon in enumerate(coupons, 1):
+                    if coupon.name == coupon_name:
+                        self.logger.info(f"クーポン選択完了: {coupon_name}")
+                        return coupon, reason
+            
+            # 部分一致するクーポンを検索
+            if coupon_name:
+                best_match = None
+                highest_similarity = 0
+                
+                # 見出しやセパレータを除外するためのパターン
+                is_separator = lambda name: "↓" in name or "★" in name or "→" in name or len(name) < 5
+                
+                for coupon in coupons:
+                    # 見出しやセパレータは除外
+                    if is_separator(coupon.name):
+                        continue
+                        
+                    # 名前の一部が含まれているかチェック
+                    if (coupon_name.lower() in coupon.name.lower() or 
+                        any(word in coupon.name.lower() for word in coupon_name.lower().split())):
+                        # 単純な文字列の長さの比率で類似度を計算
+                        similarity = min(len(coupon_name), len(coupon.name)) / max(len(coupon_name), len(coupon.name))
+                        if similarity > highest_similarity:
+                            highest_similarity = similarity
+                            best_match = coupon
+                
+                if best_match and highest_similarity > 0.2:  # 20%以上の類似度があれば採用
+                    self.logger.info(f"部分一致するクーポンを選択: {best_match.name} (類似度: {highest_similarity:.2f})")
+                    return best_match, reason
+            
+            # 見出しやセパレータを除外したクーポンリストを作成
+            valid_coupons = [c for c in coupons if not ("↓" in c.name or "★" in c.name or "→" in c.name or len(c.name) < 5)]
+            
+            # どの方法でも見つからない場合は有効なクーポンから選択
+            if valid_coupons:
+                self.logger.warning(f"有効なクーポンが選択されませんでした。最初の有効なクーポンを返します。")
+                return valid_coupons[0], "有効なクーポンが選択されなかったため、デフォルトのクーポンを選択しました。"
+            else:
+                self.logger.warning(f"有効なクーポンが見つかりませんでした。最初のクーポンを返します。")
+                return coupons[0], "有効なクーポンが選択されなかったため、デフォルトのクーポンを選択しました。"
             
         except (KeyError, ValidationError) as e:
             self.logger.error(f"クーポン選択結果のパースエラー: {e}, データ: {json_data}")

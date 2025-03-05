@@ -55,14 +55,22 @@ class Template(BaseModel):
 class StylistInfo(BaseModel):
     """スタイリスト情報を表すモデル"""
     name: str = Field(description="スタイリスト名")
+    specialties: str = Field(description="得意な技術・特徴")
     description: str = Field(description="説明文")
-    position: Optional[str] = Field(default=None, description="役職（あれば）")
 
 
 class CouponInfo(BaseModel):
-    """クーポン情報を表すモデル"""
-    name: str = Field(description="クーポン名")
-    price: Optional[str] = Field(default=None, description="価格情報（あれば）")
+    """
+    クーポン情報を表すモデル
+    """
+    name: str
+    price: int
+    description: str
+    categories: List[str] = Field(default_factory=list)
+    conditions: Dict[str, str] = Field(default_factory=dict)
+    
+    class Config:
+        frozen = True
 
 
 class ProcessResult(BaseModel):
@@ -105,9 +113,9 @@ class ScraperConfig(BaseModel):
     stylist_link_selector: str = Field(description="スタイリストリンクのセレクタ")
     stylist_name_selector: str = Field(description="スタイリスト名のセレクタ")
     stylist_description_selector: str = Field(description="スタイリスト説明のセレクタ")
-    coupon_class_name: str = Field(description="クーポン名のクラス名")
-    coupon_page_parameter_name: str = Field(description="クーポンページパラメータ名")
-    coupon_page_start_number: int = Field(description="クーポンページ開始番号")
+    coupon_class_name: str = Field(default="couponMenuName", description="クーポン名のクラス名")
+    coupon_page_parameter_name: str = Field(default="PN", description="クーポンページパラメータ名")
+    coupon_page_start_number: int = Field(default=2, description="クーポンページ開始番号")
     coupon_page_limit: int = Field(default=3, description="クーポンページ数上限")
     timeout: int = Field(default=10, description="リクエストタイムアウト（秒）")
     max_retries: int = Field(default=3, description="最大リトライ回数")

@@ -106,12 +106,14 @@ class MainProcessor(MainProcessorProtocol):
         if self.progress_callback:
             self.progress_callback(current, total, message)
     
-    async def process_single_image(self, image_path: Path) -> Optional[ProcessResultProtocol]:
+    async def process_single_image(self, image_path: Path, stylists=None, coupons=None) -> Optional[ProcessResultProtocol]:
         """
         単一の画像を処理します。
         
         Args:
             image_path: 画像ファイルのパス
+            stylists: スタイリスト情報のリスト（オプション）
+            coupons: クーポン情報のリスト（オプション）
             
         Returns:
             処理結果、またはエラー時はNone
@@ -146,36 +148,106 @@ class MainProcessor(MainProcessorProtocol):
                 self.logger.error(f"テンプレートマッチングに失敗しました: {image_path.name}")
                 return None
             
-            # 3-4. スタイリストとクーポン選択（外部データが必要な場合）
-            # この部分は実際の実装では、スタイリストとクーポンのリストを
-            # 引数として渡し、選択処理を行う必要があります。
-            # ここではデモ用にダミーデータを使用します。
+            # 3-4. スタイリストとクーポン選択
+            selected_stylist = None
+            selected_coupon = None
+            stylist_reason = None
+            coupon_reason = None
             
-            from ..data.models import StylistInfo, CouponInfo
+            # スタイリスト選択
+            if stylists and len(stylists) > 0:
+                selected_stylist, stylist_reason = await self.style_matcher.select_stylist(
+                    image_path, stylists, style_analysis
+                )
+                self.logger.info(f"スタイリスト選択: {selected_stylist.name if selected_stylist else 'なし'}")
+            else:
+                # ダミースタイリスト
+                from ..data.models import StylistInfo
+                selected_stylist = StylistInfo(
+                    name="サンプルスタイリスト",
+                    description="サンプル説明",
+                    position="スタイリスト"
+                )
             
-            # ダミースタイリスト
-            dummy_stylist = StylistInfo(
-                name="サンプルスタイリスト",
-                description="サンプル説明",
-                position="スタイリスト"
-            )
-            
-            # ダミークーポン
-            dummy_coupon = CouponInfo(
-                name="サンプルクーポン",
-                price="1000円"
-            )
+            # クーポン選択
+            if coupons and len(coupons) > 0:
+                selected_coupon, coupon_reason = await self.style_matcher.select_coupon(
+                    image_path, coupons, style_analysis
+                )
+                self.logger.info(f"クーポン選択: {selected_coupon.name if selected_coupon else 'なし'}")
+            else:
+                # ダミークーポン
+                from ..data.models import CouponInfo
+                selected_coupon = CouponInfo(
+                    name="サンプルクーポン",
+                    price="1000円"
+                )
             
             # 5. 処理結果の作成
-            result = ProcessResult(
-                image_name=image_path.name,
-                style_analysis=style_analysis,
-                attribute_analysis=attribute_analysis,
-                selected_template=template,
-                selected_stylist=dummy_stylist,
-                selected_coupon=dummy_coupon,
-                processed_at=datetime.now()
-            )
+            try:
+                # スタイル分析が辞書型の場合はStyleAnalysisに変換
+                if isinstance(style_analysis, dict):
+                    from ..data.models import StyleAnalysis, StyleFeatures
+                    features = StyleFeatures(**style_analysis.get('features', {}))
+                    style_analysis = StyleAnalysis(
+                        category=style_analysis.get('category', ''),
+                        features=features,
+                        keywords=style_analysis.get('keywords', [])
+                    )
+                
+                # 属性分析が辞書型の場合はAttributeAnalysisに変換
+                if isinstance(attribute_analysis, dict):
+                    from ..data.models import AttributeAnalysis
+                    attribute_analysis = AttributeAnalysis(
+                        sex=attribute_analysis.get('sex', ''),
+                        length=attribute_analysis.get('length', '')
+                    )
+                
+                # スタイリストが辞書型の場合はStylistInfoに変換
+                if isinstance(selected_stylist, dict):
+                    from ..data.models import StylistInfo
+                    selected_stylist = StylistInfo(
+                        name=selected_stylist.get('name', 'サンプルスタイリスト'),
+                        specialties=selected_stylist.get('specialties', ''),
+                        description=selected_stylist.get('description', '')
+                    )
+                
+                # クーポンが辞書型の場合はCouponInfoに変換
+                if isinstance(selected_coupon, dict):
+                    from ..data.models import CouponInfo
+                    selected_coupon = CouponInfo(
+                        name=selected_coupon.get('name', 'サンプルクーポン'),
+                        price=selected_coupon.get('price', 0),
+                        description=selected_coupon.get('description', ''),
+                        categories=selected_coupon.get('categories', []),
+                        conditions=selected_coupon.get('conditions', {})
+                    )
+                
+                # テンプレートが辞書型の場合はTemplateに変換
+                if isinstance(template, dict):
+                    from ..data.models import Template
+                    template = Template(
+                        category=template.get('category', ''),
+                        title=template.get('title', ''),
+                        menu=template.get('menu', ''),
+                        comment=template.get('comment', ''),
+                        hashtag=template.get('hashtag', '')
+                    )
+                
+                result = ProcessResult(
+                    image_name=image_path.name,
+                    style_analysis=style_analysis,
+                    attribute_analysis=attribute_analysis,
+                    selected_template=template,
+                    selected_stylist=selected_stylist,
+                    selected_coupon=selected_coupon,
+                    processed_at=datetime.now(),
+                    stylist_reason=stylist_reason,
+                    coupon_reason=coupon_reason
+                )
+            except Exception as e:
+                self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
+                raise ProcessingError(f"処理結果の作成に失敗しました: {str(e)}")
             
             # 結果をキャッシュに保存
             if self.cache_manager:
@@ -368,15 +440,67 @@ class MainProcessor(MainProcessorProtocol):
                     )
                     
                     # 5. 処理結果の作成
-                    result = ProcessResult(
-                        image_name=image_path.name,
-                        style_analysis=style_analysis,
-                        attribute_analysis=attribute_analysis,
-                        selected_template=template,
-                        selected_stylist=selected_stylist,
-                        selected_coupon=selected_coupon,
-                        processed_at=datetime.now()
-                    )
+                    try:
+                        # スタイル分析が辞書型の場合はStyleAnalysisに変換
+                        if isinstance(style_analysis, dict):
+                            from ..data.models import StyleAnalysis, StyleFeatures
+                            features = StyleFeatures(**style_analysis.get('features', {}))
+                            style_analysis = StyleAnalysis(
+                                category=style_analysis.get('category', ''),
+                                features=features,
+                                keywords=style_analysis.get('keywords', [])
+                            )
+                        
+                        # 属性分析が辞書型の場合はAttributeAnalysisに変換
+                        if isinstance(attribute_analysis, dict):
+                            from ..data.models import AttributeAnalysis
+                            attribute_analysis = AttributeAnalysis(
+                                sex=attribute_analysis.get('sex', ''),
+                                length=attribute_analysis.get('length', '')
+                            )
+                        
+                        # スタイリストが辞書型の場合はStylistInfoに変換
+                        if isinstance(selected_stylist, dict):
+                            from ..data.models import StylistInfo
+                            selected_stylist = StylistInfo(
+                                name=selected_stylist.get('name', 'サンプルスタイリスト'),
+                                specialties=selected_stylist.get('specialties', ''),
+                                description=selected_stylist.get('description', '')
+                            )
+                        
+                        # クーポンが辞書型の場合はCouponInfoに変換
+                        if isinstance(selected_coupon, dict):
+                            from ..data.models import CouponInfo
+                            selected_coupon = CouponInfo(
+                                name=selected_coupon.get('name', 'サンプルクーポン'),
+                                price=selected_coupon.get('price', 0),
+                                description=selected_coupon.get('description', ''),
+                                categories=selected_coupon.get('categories', []),
+                                conditions=selected_coupon.get('conditions', {})
+                            )
+                        
+                        # テンプレートが辞書型の場合はTemplateに変換
+                        if isinstance(template, dict):
+                            from ..data.models import Template
+                            template = Template(
+                                category=template.get('category', ''),
+                                title=template.get('title', ''),
+                                menu=template.get('menu', ''),
+                                comment=template.get('comment', ''),
+                                hashtag=template.get('hashtag', '')
+                            )
+                        
+                        result = ProcessResult(
+                            image_name=image_path.name,
+                            style_analysis=style_analysis,
+                            attribute_analysis=attribute_analysis,
+                            selected_template=template,
+                            selected_stylist=selected_stylist,
+                            selected_coupon=selected_coupon,
+                            processed_at=datetime.now()
+                        )
+                    except Exception as e:
+                        self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
                     
                     # 結果をキャッシュに保存
                     if self.cache_manager:

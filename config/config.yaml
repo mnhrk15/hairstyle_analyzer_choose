@@ -51,6 +51,7 @@ gemini:
   # スタイリスト選択用プロンプトテンプレート
   stylist_prompt_template: |
     以下のスタイリスト情報リストから、この画像のヘアスタイルに最も適したスタイリストを1人選んでください。
+    各スタイリストの得意な技術・特徴と説明文を特に重視して選択してください。
 
     スタイリスト情報:
     {stylists}
@@ -65,11 +66,19 @@ gemini:
 
     必ず以下のJSON形式で出力してください:
     {
-      "stylist_name": "選んだスタイリスト名"
+      "stylist_name": "選んだスタイリスト名",
+      "reason": "このスタイリストを選んだ理由（得意な技術・特徴と画像の特徴がどのように一致しているか）"
     }
   # クーポン選択用プロンプトテンプレート
   coupon_prompt_template: |
     以下のクーポンリストから、この画像のヘアスタイルに最も適したクーポンを1つ選んでください。
+
+    【重要】以下の指示に必ず従ってください：
+    1. 必ず提供されたリストの中から選択してください。
+    2. クーポンを選ぶ際は、番号（例：1、2、3など）で回答してください。
+    3. クーポン名ではなく、必ず番号で回答してください。
+    4. 回答は必ず番号のみにしてください。
+    5. 「coupon_number」フィールドには数字のみを入力してください。
 
     クーポンリスト:
     {coupons}
@@ -84,7 +93,8 @@ gemini:
 
     必ず以下のJSON形式で出力してください:
     {
-      "coupon_name": "選んだクーポン名"
+      "coupon_number": 選んだクーポンの番号（1から{coupon_count}までの整数）,
+      "reason": "このクーポンを選んだ理由（ヘアスタイルの特徴とクーポンの内容がどのように一致しているか）"
     }
   # 髪の長さの選択肢
   length_choices:
@@ -100,12 +110,10 @@ gemini:
 scraper:
   base_url: "https://beauty.hotpepper.jp/slnH000000000/"  # スクレイピング対象のベースURL
   stylist_link_selector: "p.mT10.fs16.b > a[href*='/stylist/T']"  # スタイリストリンクのセレクタ
-  stylist_name_selector: ".fs16.b"  # スタイリスト名のセレクタ
-  stylist_description_selector: ".fgPink"  # スタイリスト説明のセレクタ
-  coupon_class_name: "couponMenuName"  # クーポン名のクラス名
-  coupon_page_parameter_name: "PN"  # クーポンページパラメータ名
-  coupon_page_start_number: 2  # クーポンページ開始番号
-  coupon_page_limit: 3  # クーポンページ数上限
+  stylist_name_selector: "p.mT10.fs16.b > a"  # スタイリスト名のセレクタ
+  stylist_specialties_selector: "div.mT5.fs10 > span.fgPink"  # スタイリスト得意技術のセレクタ
+  stylist_description_selector: "div.mT5.fs10.hMin30"  # スタイリスト説明文のセレクタ
+  coupon_page_limit: 5  # クーポンページ数上限
   timeout: 10  # リクエストタイムアウト（秒）
   max_retries: 3  # 最大リトライ回数
   retry_delay: 1  # リトライ間隔（秒）
