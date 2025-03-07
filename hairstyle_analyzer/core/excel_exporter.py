@@ -188,32 +188,87 @@ class ExcelExporter(ExcelExporterProtocol):
             results: 処理結果のリスト
         """
         for i, result in enumerate(results, start=2):  # ヘッダー行の次から
-            # A列: スタイリスト名
-            sheet[f"A{i}"] = result.selected_stylist.name
+            try:
+                # 辞書型かオブジェクト型かを判定
+                if isinstance(result, dict):
+                    # 辞書型の場合
+                    # A列: スタイリスト名
+                    stylist = result.get('selected_stylist', {})
+                    sheet[f"A{i}"] = stylist.get('name', '') if isinstance(stylist, dict) else getattr(stylist, 'name', '')
+                    
+                    # B列: クーポン名
+                    coupon = result.get('selected_coupon', {})
+                    sheet[f"B{i}"] = coupon.get('name', '') if isinstance(coupon, dict) else getattr(coupon, 'name', '')
+                    
+                    # C列: コメント
+                    template = result.get('selected_template', {})
+                    sheet[f"C{i}"] = template.get('comment', '') if isinstance(template, dict) else getattr(template, 'comment', '')
+                    
+                    # D列: スタイルタイトル
+                    sheet[f"D{i}"] = template.get('title', '') if isinstance(template, dict) else getattr(template, 'title', '')
+                else:
+                    # オブジェクト型の場合
+                    # A列: スタイリスト名
+                    sheet[f"A{i}"] = getattr(result.selected_stylist, 'name', '')
+                    
+                    # B列: クーポン名
+                    sheet[f"B{i}"] = getattr(result.selected_coupon, 'name', '')
+                    
+                    # C列: コメント
+                    sheet[f"C{i}"] = getattr(result.selected_template, 'comment', '')
+                    
+                    # D列: スタイルタイトル
+                    sheet[f"D{i}"] = getattr(result.selected_template, 'title', '')
+            except Exception as e:
+                self.logger.error(f"Excelデータ追加エラー (行 {i}): {e}")
+                # エラーが発生しても続行するために空の値を設定
+                sheet[f"A{i}"] = "ERROR"
+                sheet[f"B{i}"] = "ERROR"
+                sheet[f"C{i}"] = "ERROR"
+                sheet[f"D{i}"] = "ERROR"
             
-            # B列: クーポン名
-            sheet[f"B{i}"] = result.selected_coupon.name
-            
-            # C列: コメント
-            sheet[f"C{i}"] = result.selected_template.comment
-            
-            # D列: スタイルタイトル
-            sheet[f"D{i}"] = result.selected_template.title
-            
-            # E列: 性別
-            sheet[f"E{i}"] = result.attribute_analysis.sex
-            
-            # F列: 長さ
-            sheet[f"F{i}"] = result.attribute_analysis.length
-            
-            # G列: スタイルメニュー
-            sheet[f"G{i}"] = result.selected_template.menu
-            
-            # H列: ハッシュタグ
-            sheet[f"H{i}"] = result.selected_template.hashtag
-            
-            # I列: 画像ファイル名
-            sheet[f"I{i}"] = result.image_name
+            try:
+                # E列: 性別
+                if isinstance(result, dict):
+                    attr_analysis = result.get('attribute_analysis', {})
+                    sheet[f"E{i}"] = attr_analysis.get('sex', '') if isinstance(attr_analysis, dict) else getattr(attr_analysis, 'sex', '')
+                else:
+                    sheet[f"E{i}"] = getattr(result.attribute_analysis, 'sex', '')
+                
+                # F列: 長さ
+                if isinstance(result, dict):
+                    attr_analysis = result.get('attribute_analysis', {})
+                    sheet[f"F{i}"] = attr_analysis.get('length', '') if isinstance(attr_analysis, dict) else getattr(attr_analysis, 'length', '')
+                else:
+                    sheet[f"F{i}"] = getattr(result.attribute_analysis, 'length', '')
+                
+                # G列: スタイルメニュー
+                if isinstance(result, dict):
+                    template = result.get('selected_template', {})
+                    sheet[f"G{i}"] = template.get('menu', '') if isinstance(template, dict) else getattr(template, 'menu', '')
+                else:
+                    sheet[f"G{i}"] = getattr(result.selected_template, 'menu', '')
+                
+                # H列: ハッシュタグ
+                if isinstance(result, dict):
+                    template = result.get('selected_template', {})
+                    sheet[f"H{i}"] = template.get('hashtag', '') if isinstance(template, dict) else getattr(template, 'hashtag', '')
+                else:
+                    sheet[f"H{i}"] = getattr(result.selected_template, 'hashtag', '')
+                
+                # I列: 画像ファイル名
+                if isinstance(result, dict):
+                    sheet[f"I{i}"] = result.get('image_name', '')
+                else:
+                    sheet[f"I{i}"] = getattr(result, 'image_name', '')
+            except Exception as e:
+                self.logger.error(f"Excelデータ追加エラー2 (行 {i}): {e}")
+                # エラーが発生しても続行するために空の値を設定
+                sheet[f"E{i}"] = "ERROR"
+                sheet[f"F{i}"] = "ERROR"
+                sheet[f"G{i}"] = "ERROR"
+                sheet[f"H{i}"] = "ERROR"
+                sheet[f"I{i}"] = "ERROR"
     
     def _adjust_column_widths(self, sheet: openpyxl.worksheet.worksheet.Worksheet) -> None:
         """

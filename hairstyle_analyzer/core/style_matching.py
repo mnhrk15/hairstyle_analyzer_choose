@@ -36,7 +36,7 @@ class StyleMatchingService:
     
     @async_with_error_handling(GeminiAPIError, "スタイリスト選択中にエラーが発生しました")
     async def select_stylist(self, image_path: Path, stylists: List[StylistInfoProtocol], 
-                            analysis: StyleAnalysisProtocol) -> Optional[StylistInfoProtocol]:
+                            analysis: StyleAnalysisProtocol) -> Tuple[Optional[StylistInfoProtocol], Optional[str]]:
         """
         画像と分析結果に基づいて最適なスタイリストを選択します。
         
@@ -60,9 +60,11 @@ class StyleMatchingService:
         
         # Gemini APIを使用してスタイリストを選択
         try:
-            selected_stylist = await self.gemini_service.select_stylist(
+            result = await self.gemini_service.select_stylist(
                 image_path, stylists, analysis
             )
+            
+            selected_stylist, reason = result
             
             if selected_stylist:
                 self.logger.info(f"スタイリストを選択しました: {selected_stylist.name}")
@@ -70,21 +72,22 @@ class StyleMatchingService:
                 self.logger.warning("スタイリストを選択できませんでした")
                 # フォールバック: 最初のスタイリストを返す
                 selected_stylist = stylists[0]
+                reason = "フォールバック: 最初のスタイリストを選択"
                 self.logger.info(f"フォールバック: 最初のスタイリストを選択: {selected_stylist.name}")
             
-            return selected_stylist
+            return selected_stylist, reason
             
         except Exception as e:
             self.logger.error(f"スタイリスト選択エラー: {str(e)}")
             # エラー時には最初のスタイリストをフォールバックとして返す
             if stylists:
                 self.logger.info(f"エラー時のフォールバック: 最初のスタイリスト {stylists[0].name} を選択")
-                return stylists[0]
-            return None
+                return stylists[0], "エラー発生のためフォールバックとして選択"
+            return None, None
     
     @async_with_error_handling(GeminiAPIError, "クーポン選択中にエラーが発生しました")
     async def select_coupon(self, image_path: Path, coupons: List[CouponInfoProtocol], 
-                           analysis: StyleAnalysisProtocol) -> Optional[CouponInfoProtocol]:
+                           analysis: StyleAnalysisProtocol) -> Tuple[Optional[CouponInfoProtocol], Optional[str]]:
         """
         画像と分析結果に基づいて最適なクーポンを選択します。
         
@@ -108,9 +111,11 @@ class StyleMatchingService:
         
         # Gemini APIを使用してクーポンを選択
         try:
-            selected_coupon = await self.gemini_service.select_coupon(
+            result = await self.gemini_service.select_coupon(
                 image_path, coupons, analysis
             )
+            
+            selected_coupon, reason = result
             
             if selected_coupon:
                 self.logger.info(f"クーポンを選択しました: {selected_coupon.name}")
@@ -118,17 +123,18 @@ class StyleMatchingService:
                 self.logger.warning("クーポンを選択できませんでした")
                 # フォールバック: 最初のクーポンを返す
                 selected_coupon = coupons[0]
+                reason = "フォールバック: 最初のクーポンを選択"
                 self.logger.info(f"フォールバック: 最初のクーポンを選択: {selected_coupon.name}")
             
-            return selected_coupon
+            return selected_coupon, reason
             
         except Exception as e:
             self.logger.error(f"クーポン選択エラー: {str(e)}")
             # エラー時には最初のクーポンをフォールバックとして返す
             if coupons:
                 self.logger.info(f"エラー時のフォールバック: 最初のクーポン {coupons[0].name} を選択")
-                return coupons[0]
-            return None
+                return coupons[0], "エラー発生のためフォールバックとして選択"
+            return None, None
     
     def match_by_text_similarity(self, target_text: str, candidates: List[str]) -> int:
         """
