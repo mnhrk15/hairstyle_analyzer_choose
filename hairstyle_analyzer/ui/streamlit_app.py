@@ -597,7 +597,7 @@ def render_main_content():
         cols = st.columns(min(3, len(uploaded_files)))
         for i, uploaded_file in enumerate(uploaded_files[:6]):  # 最大6枚まで表示
             with cols[i % 3]:
-                st.image(uploaded_file, caption=uploaded_file.name, use_column_width=True)
+                st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
         
         # 6枚以上の場合は省略メッセージを表示
         if len(uploaded_files) > 6:
