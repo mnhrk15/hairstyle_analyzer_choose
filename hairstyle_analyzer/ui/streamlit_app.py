@@ -80,15 +80,19 @@ def update_progress(current, total, message=""):
         st.session_state[SESSION_PROGRESS] = progress
 
 
-async def process_images(processor, image_paths, progress_callback=None):
+async def process_images(processor, image_paths, stylists=None, coupons=None, progress_callback=None):
     """画像処理を実行する関数"""
     results = []
     total = len(image_paths)
     
     for i, image_path in enumerate(image_paths):
         try:
-            # 1画像の処理
-            result = await processor.process_single_image(image_path)
+            # 1画像の処理（スタイリストとクーポンのデータを渡す）
+            if stylists and coupons:
+                result = await processor.process_single_image(image_path, stylists, coupons)
+            else:
+                result = await processor.process_single_image(image_path)
+            
             results.append(result)
             
             # 進捗更新
@@ -193,15 +197,73 @@ def display_results(results):
     # 結果データをDataFrameに変換
     data = []
     for result in results:
-        data.append({
-            "画像": result.image_name,
-            "カテゴリ": result.style_analysis.category,
-            "性別": result.attribute_analysis.sex,
-            "長さ": result.attribute_analysis.length,
-            "タイトル": result.selected_template.title,
-            "スタイリスト": result.selected_stylist.name,
-            "クーポン": result.selected_coupon.name
-        })
+        # 結果が辞書型かオブジェクト型か確認
+        try:
+            if isinstance(result, dict):
+                # 辞書型の場合
+                image_name = result.get('image_name', '不明')
+                
+                # style_analysisの取得
+                style_analysis = result.get('style_analysis', {})
+                if isinstance(style_analysis, dict):
+                    category = style_analysis.get('category', '')
+                else:
+                    category = getattr(style_analysis, 'category', '')
+                
+                # attribute_analysisの取得
+                attribute_analysis = result.get('attribute_analysis', {})
+                if isinstance(attribute_analysis, dict):
+                    sex = attribute_analysis.get('sex', '')
+                    length = attribute_analysis.get('length', '')
+                else:
+                    sex = getattr(attribute_analysis, 'sex', '')
+                    length = getattr(attribute_analysis, 'length', '')
+                
+                # selected_templateの取得
+                selected_template = result.get('selected_template', {})
+                if isinstance(selected_template, dict):
+                    title = selected_template.get('title', '')
+                else:
+                    title = getattr(selected_template, 'title', '')
+                
+                # selected_stylistの取得
+                selected_stylist = result.get('selected_stylist', {})
+                if isinstance(selected_stylist, dict):
+                    stylist_name = selected_stylist.get('name', '')
+                else:
+                    stylist_name = getattr(selected_stylist, 'name', '')
+                
+                # selected_couponの取得
+                selected_coupon = result.get('selected_coupon', {})
+                if isinstance(selected_coupon, dict):
+                    coupon_name = selected_coupon.get('name', '')
+                else:
+                    coupon_name = getattr(selected_coupon, 'name', '')
+            else:
+                # オブジェクト型の場合
+                image_name = getattr(result, 'image_name', '不明')
+                category = getattr(result.style_analysis, 'category', '')
+                sex = getattr(result.attribute_analysis, 'sex', '')
+                length = getattr(result.attribute_analysis, 'length', '')
+                title = getattr(result.selected_template, 'title', '')
+                stylist_name = getattr(result.selected_stylist, 'name', '')
+                coupon_name = getattr(result.selected_coupon, 'name', '')
+            
+            # データの追加
+            data.append({
+                "画像": image_name,
+                "カテゴリ": category,
+                "性別": sex,
+                "長さ": length,
+                "タイトル": title,
+                "スタイリスト": stylist_name,
+                "クーポン": coupon_name
+            })
+        except Exception as e:
+            st.error(f"結果の処理中にエラーが発生しました: {str(e)}")
+            st.write(f"結果の形式: {type(result)}")
+            if isinstance(result, dict):
+                st.write(f"結果のキー: {list(result.keys())}")
     
     df = pd.DataFrame(data)
     
@@ -219,7 +281,94 @@ def display_results(results):
             processor = st.session_state[SESSION_PROCESSOR]
             
             # Excel生成
-            excel_bytes = processor.export_to_excel(results)
+            # 処理結果をプロセッサーに設定
+            processor.clear_results()
+            
+            # 結果をプロセッサーに追加する前に、辞書型の場合はProcessResultオブジェクトに変換
+            from ..data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo
+            from datetime import datetime
+            
+            for result in results:
+                if isinstance(result, dict):
+                    # 辞書型の場合、ProcessResultオブジェクトに変換
+                    
+                    # style_analysisの取得と変換
+                    style_analysis_dict = result.get('style_analysis', {})
+                    if isinstance(style_analysis_dict, dict):
+                        style_analysis = StyleAnalysis(
+                            category=style_analysis_dict.get('category', ''),
+                            features=style_analysis_dict.get('features', []),
+                            colors=style_analysis_dict.get('colors', []),
+                            textures=style_analysis_dict.get('textures', [])
+                        )
+                    else:
+                        style_analysis = style_analysis_dict
+                    
+                    # attribute_analysisの取得と変換
+                    attribute_analysis_dict = result.get('attribute_analysis', {})
+                    if isinstance(attribute_analysis_dict, dict):
+                        attribute_analysis = AttributeAnalysis(
+                            sex=attribute_analysis_dict.get('sex', ''),
+                            length=attribute_analysis_dict.get('length', '')
+                        )
+                    else:
+                        attribute_analysis = attribute_analysis_dict
+                    
+                    # selected_templateの取得と変換
+                    template_dict = result.get('selected_template', {})
+                    if isinstance(template_dict, dict):
+                        template = Template(
+                            category=template_dict.get('category', ''),
+                            title=template_dict.get('title', ''),
+                            menu=template_dict.get('menu', ''),
+                            comment=template_dict.get('comment', ''),
+                            hashtag=template_dict.get('hashtag', '')
+                        )
+                    else:
+                        template = template_dict
+                    
+                    # selected_stylistの取得と変換
+                    stylist_dict = result.get('selected_stylist', {})
+                    if isinstance(stylist_dict, dict):
+                        stylist = StylistInfo(
+                            name=stylist_dict.get('name', ''),
+                            specialties=stylist_dict.get('specialties', ''),
+                            description=stylist_dict.get('description', '')
+                        )
+                    else:
+                        stylist = stylist_dict
+                    
+                    # selected_couponの取得と変換
+                    coupon_dict = result.get('selected_coupon', {})
+                    if isinstance(coupon_dict, dict):
+                        coupon = CouponInfo(
+                            name=coupon_dict.get('name', ''),
+                            price=coupon_dict.get('price', 0),
+                            description=coupon_dict.get('description', ''),
+                            categories=coupon_dict.get('categories', []),
+                            conditions=coupon_dict.get('conditions', {})
+                        )
+                    else:
+                        coupon = coupon_dict
+                    
+                    # ProcessResultオブジェクトの作成
+                    process_result = ProcessResult(
+                        image_name=result.get('image_name', '不明'),
+                        style_analysis=style_analysis,
+                        attribute_analysis=attribute_analysis,
+                        selected_template=template,
+                        selected_stylist=stylist,
+                        selected_coupon=coupon,
+                        processed_at=result.get('processed_at', datetime.now())
+                    )
+                    
+                    processor.results.append(process_result)
+                else:
+                    # すでにProcessResultオブジェクトの場合はそのまま追加
+                    processor.results.append(result)
+            
+            # Excelバイナリデータを取得
+            excel_bytes = processor.get_excel_binary()
             
             # ダウンロードボタンを表示
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -482,8 +631,18 @@ def render_main_content():
                         progress_bar.progress(progress)
                         status_text.text(f"処理中: {current}/{total} ({int(progress * 100)}%)")
                     
-                    # 処理の実行
-                    results = asyncio.run(process_images(processor, image_paths, update_progress))
+                    # スタイリストとクーポンのデータを取得
+                    stylists = st.session_state.get(SESSION_STYLISTS, [])
+                    coupons = st.session_state.get(SESSION_COUPONS, [])
+                    
+                    # スタイリストとクーポンのデータが存在するか確認
+                    if not stylists:
+                        st.warning("スタイリスト情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
+                    if not coupons:
+                        st.warning("クーポン情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
+                    
+                    # 処理の実行（スタイリストとクーポンのデータを渡す）
+                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, update_progress))
                     
                     # 処理完了
                     progress_bar.progress(1.0)

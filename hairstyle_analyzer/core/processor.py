@@ -161,13 +161,15 @@ class MainProcessor(MainProcessorProtocol):
                 )
                 self.logger.info(f"スタイリスト選択: {selected_stylist.name if selected_stylist else 'なし'}")
             else:
-                # ダミースタイリスト
+                # スタイリストリストが空の場合はエラーログを記録
+                self.logger.warning("スタイリストリストが空のため、選択できません")
                 from ..data.models import StylistInfo
                 selected_stylist = StylistInfo(
-                    name="サンプルスタイリスト",
-                    description="サンプル説明",
-                    position="スタイリスト"
+                    name="スタイリスト情報なし",
+                    description="スタイリスト情報が取得できませんでした",
+                    specialties="情報なし"
                 )
+                stylist_reason = "スタイリスト情報が取得できませんでした"
             
             # クーポン選択
             if coupons and len(coupons) > 0:
@@ -176,12 +178,15 @@ class MainProcessor(MainProcessorProtocol):
                 )
                 self.logger.info(f"クーポン選択: {selected_coupon.name if selected_coupon else 'なし'}")
             else:
-                # ダミークーポン
+                # クーポンリストが空の場合はエラーログを記録
+                self.logger.warning("クーポンリストが空のため、選択できません")
                 from ..data.models import CouponInfo
                 selected_coupon = CouponInfo(
-                    name="サンプルクーポン",
-                    price="1000円"
+                    name="クーポン情報なし",
+                    price=0,
+                    description="クーポン情報が取得できませんでした"
                 )
+                coupon_reason = "クーポン情報が取得できませんでした"
             
             # 5. 処理結果の作成
             try:
@@ -241,9 +246,7 @@ class MainProcessor(MainProcessorProtocol):
                     selected_template=template,
                     selected_stylist=selected_stylist,
                     selected_coupon=selected_coupon,
-                    processed_at=datetime.now(),
-                    stylist_reason=stylist_reason,
-                    coupon_reason=coupon_reason
+                    processed_at=datetime.now()
                 )
             except Exception as e:
                 self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
@@ -430,14 +433,16 @@ class MainProcessor(MainProcessorProtocol):
                         continue
                     
                     # 3. スタイリスト選択
-                    selected_stylist = await self.style_matcher.select_stylist(
+                    stylist_result = await self.style_matcher.select_stylist(
                         image_path, stylists, style_analysis
                     )
+                    selected_stylist, stylist_reason = stylist_result
                     
                     # 4. クーポン選択
-                    selected_coupon = await self.style_matcher.select_coupon(
+                    coupon_result = await self.style_matcher.select_coupon(
                         image_path, coupons, style_analysis
                     )
+                    selected_coupon, coupon_reason = coupon_result
                     
                     # 5. 処理結果の作成
                     try:
