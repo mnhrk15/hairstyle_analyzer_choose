@@ -80,7 +80,7 @@ class ImagePreviewComponent:
                     resized_image = pil_image.resize(new_size, Image.LANCZOS)
                     
                     # 画像を表示
-                    st.image(resized_image, caption=caption, use_column_width=True)
+                    st.image(resized_image, caption=caption, use_container_width=True)
                     
                     # 選択ボタン
                     if on_select:
@@ -119,7 +119,7 @@ class ImagePreviewComponent:
                     pil_image = pil_image.resize(new_size, Image.LANCZOS)
             
             # 画像を表示
-            st.image(pil_image, caption=caption, use_column_width=use_full_width)
+            st.image(pil_image, caption=caption, use_container_width=use_full_width)
         else:
             st.error("画像を表示できません")
     
@@ -188,7 +188,7 @@ class ImagePreviewComponent:
         if 0 <= selected_idx < len(images):
             selected_image = self._get_pil_image(images[selected_idx])
             if selected_image:
-                st.image(selected_image, caption=captions[selected_idx], use_column_width=True)
+                st.image(selected_image, caption=captions[selected_idx], use_container_width=True)
             else:
                 st.error("選択された画像を表示できません")
         
@@ -236,7 +236,7 @@ class ImagePreviewComponent:
                         thumb = pil_image.resize(new_size, Image.LANCZOS)
                         
                         # サムネイルを表示
-                        st.image(thumb, caption=f"#{i+1}", use_column_width=False)
+                        st.image(thumb, caption=f"#{i+1}", use_container_width=False)
                         
                         # 選択ボタン
                         if st.button(f"表示", key=f"thumb_{i}"):
