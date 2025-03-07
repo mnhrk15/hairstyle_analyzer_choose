@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+# スタイル関連のインポートを削除
 from openpyxl.utils import get_column_letter
 
 from ..data.models import ProcessResult, ExcelConfig
@@ -78,9 +78,6 @@ class ExcelExporter(ExcelExporterProtocol):
         # 列幅の自動調整
         self._adjust_column_widths(sheet)
         
-        # スタイルの適用
-        self._apply_styles(sheet, len(results))
-        
         # 保存
         try:
             workbook.save(output_path)
@@ -120,9 +117,6 @@ class ExcelExporter(ExcelExporterProtocol):
         
         # 列幅の自動調整
         self._adjust_column_widths(sheet)
-        
-        # スタイルの適用
-        self._apply_styles(sheet, len(results))
         
         # 一時ファイルに保存してバイナリデータを取得
         try:
@@ -298,46 +292,4 @@ class ExcelExporter(ExcelExporterProtocol):
             
             sheet.column_dimensions[column_letter].width = adjusted_width
     
-    def _apply_styles(self, sheet: openpyxl.worksheet.worksheet.Worksheet, row_count: int) -> None:
-        """
-        シートにスタイルを適用します。
-        
-        Args:
-            sheet: 適用対象のワークシート
-            row_count: データ行数
-        """
-        # ヘッダー行のスタイル
-        header_font = Font(bold=True, size=12, color="FFFFFF")
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        
-        # セル枠線
-        thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
-        
-        # ヘッダー行にスタイルを適用
-        for col in range(1, len(self.config.headers) + 1):
-            cell = sheet.cell(row=1, column=col)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = header_alignment
-            cell.border = thin_border
-        
-        # データ行のスタイル
-        data_alignment = Alignment(vertical="center", wrap_text=True)
-        
-        # データ行にスタイルを適用
-        for row in range(2, row_count + 2):  # ヘッダーの次からデータ行まで
-            for col in range(1, len(self.config.headers) + 1):
-                cell = sheet.cell(row=row, column=col)
-                cell.alignment = data_alignment
-                cell.border = thin_border
-                
-                # 特定のカラムに特別なスタイルを適用
-                # 例：ハッシュタグカラム（H列）のスタイル
-                if col == 8:  # H列
-                    cell.alignment = Alignment(vertical="center", wrap_text=True)
+    # _apply_styles メソッドを削除
