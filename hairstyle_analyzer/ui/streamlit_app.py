@@ -394,120 +394,7 @@ def display_results(results):
             
 
     
-    # Excel出力ボタン
-    if st.button("Excel出力"):
-        try:
-            # セッションにプロセッサーがなければ作成
-            if SESSION_PROCESSOR not in st.session_state:
-                config_manager = get_config_manager()
-                st.session_state[SESSION_PROCESSOR] = create_processor(config_manager)
-            
-            processor = st.session_state[SESSION_PROCESSOR]
-            
-            # Excel生成
-            # 処理結果をプロセッサーに設定
-            processor.clear_results()
-            
-            # 結果をプロセッサーに追加する前に、辞書型の場合はProcessResultオブジェクトに変換
-            from ..data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo
-            from datetime import datetime
-            
-            for result in results:
-                if isinstance(result, dict):
-                    # 辞書型の場合、ProcessResultオブジェクトに変換
-                    
-                    # style_analysisの取得と変換
-                    style_analysis_dict = result.get('style_analysis', {})
-                    if isinstance(style_analysis_dict, dict):
-                        style_analysis = StyleAnalysis(
-                            category=style_analysis_dict.get('category', ''),
-                            features=style_analysis_dict.get('features', []),
-                            colors=style_analysis_dict.get('colors', []),
-                            textures=style_analysis_dict.get('textures', [])
-                        )
-                    else:
-                        style_analysis = style_analysis_dict
-                    
-                    # attribute_analysisの取得と変換
-                    attribute_analysis_dict = result.get('attribute_analysis', {})
-                    if isinstance(attribute_analysis_dict, dict):
-                        attribute_analysis = AttributeAnalysis(
-                            sex=attribute_analysis_dict.get('sex', ''),
-                            length=attribute_analysis_dict.get('length', '')
-                        )
-                    else:
-                        attribute_analysis = attribute_analysis_dict
-                    
-                    # selected_templateの取得と変換
-                    template_dict = result.get('selected_template', {})
-                    if isinstance(template_dict, dict):
-                        template = Template(
-                            category=template_dict.get('category', ''),
-                            title=template_dict.get('title', ''),
-                            menu=template_dict.get('menu', ''),
-                            comment=template_dict.get('comment', ''),
-                            hashtag=template_dict.get('hashtag', '')
-                        )
-                    else:
-                        template = template_dict
-                    
-                    # selected_stylistの取得と変換
-                    stylist_dict = result.get('selected_stylist', {})
-                    if isinstance(stylist_dict, dict):
-                        stylist = StylistInfo(
-                            name=stylist_dict.get('name', ''),
-                            specialties=stylist_dict.get('specialties', ''),
-                            description=stylist_dict.get('description', '')
-                        )
-                    else:
-                        stylist = stylist_dict
-                    
-                    # selected_couponの取得と変換
-                    coupon_dict = result.get('selected_coupon', {})
-                    if isinstance(coupon_dict, dict):
-                        coupon = CouponInfo(
-                            name=coupon_dict.get('name', ''),
-                            price=coupon_dict.get('price', 0),
-                            description=coupon_dict.get('description', ''),
-                            categories=coupon_dict.get('categories', []),
-                            conditions=coupon_dict.get('conditions', {})
-                        )
-                    else:
-                        coupon = coupon_dict
-                    
-                    # ProcessResultオブジェクトの作成
-                    process_result = ProcessResult(
-                        image_name=result.get('image_name', '不明'),
-                        style_analysis=style_analysis,
-                        attribute_analysis=attribute_analysis,
-                        selected_template=template,
-                        selected_stylist=stylist,
-                        selected_coupon=coupon,
-                        processed_at=result.get('processed_at', datetime.now())
-                    )
-                    
-                    processor.results.append(process_result)
-                else:
-                    # すでにProcessResultオブジェクトの場合はそのまま追加
-                    processor.results.append(result)
-            
-            # Excelバイナリデータを取得
-            excel_bytes = processor.get_excel_binary()
-            
-            # ダウンロードボタンを表示
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"hairstyle_analysis_{timestamp}.xlsx"
-            
-            st.download_button(
-                label="Excelファイルをダウンロード",
-                data=excel_bytes,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-        except Exception as e:
-            display_error(e)
-            st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+
 
 
 async def fetch_salon_data(url, config_manager):
@@ -777,6 +664,134 @@ def render_main_content():
                     
                     # 結果表示
                     display_results(results)
+                    
+                    # 自動Excel出力処理
+                    try:
+                        # セッションにプロセッサーがなければ作成
+                        if SESSION_PROCESSOR not in st.session_state:
+                            config_manager = get_config_manager()
+                            st.session_state[SESSION_PROCESSOR] = create_processor(config_manager)
+                        
+                        processor = st.session_state[SESSION_PROCESSOR]
+                        
+                        # Excel生成
+                        # 処理結果をプロセッサーに設定
+                        processor.clear_results()
+                        
+                        # 結果をプロセッサーに追加する前に、辞書型の場合はProcessResultオブジェクトに変換
+                        from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo
+                        from datetime import datetime
+                        
+                        for result in results:
+                            if isinstance(result, dict):
+                                # 辞書型の場合、ProcessResultオブジェクトに変換
+                                
+                                # style_analysisの取得と変換
+                                style_analysis_dict = result.get('style_analysis', {})
+                                if isinstance(style_analysis_dict, dict):
+                                    style_analysis = StyleAnalysis(
+                                        category=style_analysis_dict.get('category', ''),
+                                        features=style_analysis_dict.get('features', []),
+                                        colors=style_analysis_dict.get('colors', []),
+                                        textures=style_analysis_dict.get('textures', [])
+                                    )
+                                else:
+                                    style_analysis = style_analysis_dict
+                                
+                                # attribute_analysisの取得と変換
+                                attribute_analysis_dict = result.get('attribute_analysis', {})
+                                if isinstance(attribute_analysis_dict, dict):
+                                    attribute_analysis = AttributeAnalysis(
+                                        sex=attribute_analysis_dict.get('sex', ''),
+                                        length=attribute_analysis_dict.get('length', '')
+                                    )
+                                else:
+                                    attribute_analysis = attribute_analysis_dict
+                                
+                                # selected_templateの取得と変換
+                                template_dict = result.get('selected_template', {})
+                                if isinstance(template_dict, dict):
+                                    template = Template(
+                                        category=template_dict.get('category', ''),
+                                        title=template_dict.get('title', ''),
+                                        menu=template_dict.get('menu', ''),
+                                        comment=template_dict.get('comment', ''),
+                                        hashtag=template_dict.get('hashtag', '')
+                                    )
+                                else:
+                                    template = template_dict
+                                
+                                # selected_stylistの取得と変換
+                                stylist_dict = result.get('selected_stylist', {})
+                                if isinstance(stylist_dict, dict):
+                                    stylist = StylistInfo(
+                                        name=stylist_dict.get('name', ''),
+                                        specialties=stylist_dict.get('specialties', ''),
+                                        description=stylist_dict.get('description', '')
+                                    )
+                                else:
+                                    stylist = stylist_dict
+                                
+                                # selected_couponの取得と変換
+                                coupon_dict = result.get('selected_coupon', {})
+                                if isinstance(coupon_dict, dict):
+                                    coupon = CouponInfo(
+                                        name=coupon_dict.get('name', ''),
+                                        price=coupon_dict.get('price', 0),
+                                        description=coupon_dict.get('description', ''),
+                                        categories=coupon_dict.get('categories', []),
+                                        conditions=coupon_dict.get('conditions', {})
+                                    )
+                                else:
+                                    coupon = coupon_dict
+                                
+                                # ProcessResultオブジェクトの作成
+                                process_result = ProcessResult(
+                                    image_name=result.get('image_name', '不明'),
+                                    style_analysis=style_analysis,
+                                    attribute_analysis=attribute_analysis,
+                                    selected_template=template,
+                                    selected_stylist=stylist,
+                                    selected_coupon=coupon,
+                                    processed_at=result.get('processed_at', datetime.now())
+                                )
+                                
+                                processor.results.append(process_result)
+                            else:
+                                # すでにProcessResultオブジェクトの場合はそのまま追加
+                                processor.results.append(result)
+                        
+                        # Excelバイナリデータを取得
+                        excel_bytes = processor.get_excel_binary()
+                        
+                        # Excelファイルの生成
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"hairstyle_analysis_{timestamp}.xlsx"
+                        
+                        # 通知メッセージとダウンロードボタンを表示
+                        st.success("タイトル生成が完了しました。下のボタンをクリックしてExcelファイルをダウンロードしてください。")
+                        
+                        # 目立つスタイルでダウンロードボタンを表示
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        with col2:
+                            st.download_button(
+                                label="⬇️ Excelファイルをダウンロード ⬇️",
+                                data=excel_bytes,
+                                file_name=filename,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                help="クリックしてExcelファイルをダウンロード",
+                                type="primary",
+                                use_container_width=True
+                            )
+                            
+                        # 少しスペースを追加
+                        st.write("")
+                        
+                        # 自動ダウンロードの代わりに、目立つダウンロードボタンを表示
+                        
+                    except Exception as e:
+                        display_error(e)
+                        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
             
             except Exception as e:
                 display_error(e)
