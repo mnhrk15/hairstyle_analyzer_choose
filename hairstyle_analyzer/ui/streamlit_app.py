@@ -267,8 +267,132 @@ def display_results(results):
     
     df = pd.DataFrame(data)
     
-    # データフレームを表示
+    # 概要データフレームを表示
+    st.write("### 結果概要")
     st.dataframe(df)
+    
+    # 詳細情報をエクスパンダーで表示
+    st.write("### 詳細情報")
+    
+    # 各画像ごとにエクスパンダーを作成
+    for result in results:
+        # 画像名を取得
+        if isinstance(result, dict):
+            image_name = result.get('image_name', '不明')
+        else:
+            image_name = getattr(result, 'image_name', '不明')
+        
+        # エクスパンダーを作成（デフォルトで閉じた状態）
+        with st.expander(f"📷 {image_name}", expanded=False):
+            # 3列レイアウトで表示
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.write("#### 基本情報")
+                
+                # スタイル分析結果
+                if isinstance(result, dict):
+                    style_analysis = result.get('style_analysis', {})
+                    if isinstance(style_analysis, dict):
+                        category = style_analysis.get('category', '')
+                        features = style_analysis.get('features', {})
+                    else:
+                        category = getattr(style_analysis, 'category', '')
+                        features = getattr(style_analysis, 'features', None)
+                    
+                    # 属性分析結果
+                    attribute_analysis = result.get('attribute_analysis', {})
+                    if isinstance(attribute_analysis, dict):
+                        sex = attribute_analysis.get('sex', '')
+                        length = attribute_analysis.get('length', '')
+                    else:
+                        sex = getattr(attribute_analysis, 'sex', '')
+                        length = getattr(attribute_analysis, 'length', '')
+                else:
+                    category = getattr(result.style_analysis, 'category', '')
+                    features = getattr(result.style_analysis, 'features', None)
+                    sex = getattr(result.attribute_analysis, 'sex', '')
+                    length = getattr(result.attribute_analysis, 'length', '')
+                
+                st.write(f"**カテゴリ:** {category}")
+                st.write(f"**性別:** {sex}")
+                st.write(f"**長さ:** {length}")
+                
+                # 特徴の詳細表示
+                st.write("#### スタイル特徴")
+                if features:
+                    if isinstance(features, dict):
+                        for key, value in features.items():
+                            st.write(f"**{key}:** {value}")
+                    else:
+                        st.write(f"**色:** {getattr(features, 'color', '')}")
+                        st.write(f"**カット技法:** {getattr(features, 'cut_technique', '')}")
+                        st.write(f"**スタイリング:** {getattr(features, 'styling', '')}")
+                        st.write(f"**印象:** {getattr(features, 'impression', '')}")
+            
+            with col2:
+                st.write("#### スタイリスト情報")
+                
+                # スタイリスト情報
+                if isinstance(result, dict):
+                    stylist = result.get('selected_stylist', {})
+                    if isinstance(stylist, dict):
+                        stylist_name = stylist.get('name', '')
+                        specialties = stylist.get('specialties', '')
+                        description = stylist.get('description', '')
+                    else:
+                        stylist_name = getattr(stylist, 'name', '')
+                        specialties = getattr(stylist, 'specialties', '')
+                        description = getattr(stylist, 'description', '')
+                    
+                    # スタイリスト選択理由
+                    stylist_reason = result.get('stylist_reason', '')
+                else:
+                    stylist_name = getattr(result.selected_stylist, 'name', '')
+                    specialties = getattr(result.selected_stylist, 'specialties', '')
+                    description = getattr(result.selected_stylist, 'description', '')
+                    stylist_reason = getattr(result, 'stylist_reason', None)
+                
+                st.write(f"**スタイリスト名:** {stylist_name}")
+                st.write(f"**得意な技術・特徴:** {specialties}")
+                st.write(f"**説明文:** {description}")
+                
+                # 選択理由を表示
+                st.write("#### 選択理由")
+                st.write(stylist_reason or "選択理由は記録されていません")
+            
+            with col3:
+                st.write("#### クーポン情報")
+                
+                # クーポン情報
+                if isinstance(result, dict):
+                    coupon = result.get('selected_coupon', {})
+                    if isinstance(coupon, dict):
+                        coupon_name = coupon.get('name', '')
+                        price = coupon.get('price', 0)
+                        description = coupon.get('description', '')
+                    else:
+                        coupon_name = getattr(coupon, 'name', '')
+                        price = getattr(coupon, 'price', 0)
+                        description = getattr(coupon, 'description', '')
+                    
+                    # クーポン選択理由
+                    coupon_reason = result.get('coupon_reason', '')
+                else:
+                    coupon_name = getattr(result.selected_coupon, 'name', '')
+                    price = getattr(result.selected_coupon, 'price', 0)
+                    description = getattr(result.selected_coupon, 'description', '')
+                    coupon_reason = getattr(result, 'coupon_reason', None)
+                
+                st.write(f"**クーポン名:** {coupon_name}")
+                st.write(f"**価格:** {price}円")
+                st.write(f"**説明:** {description}")
+                
+                # 選択理由を表示
+                st.write("#### 選択理由")
+                st.write(coupon_reason or "選択理由は記録されていません")
+            
+
     
     # Excel出力ボタン
     if st.button("Excel出力"):

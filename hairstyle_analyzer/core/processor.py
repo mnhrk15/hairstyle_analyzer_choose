@@ -246,6 +246,8 @@ class MainProcessor(MainProcessorProtocol):
                     selected_template=template,
                     selected_stylist=selected_stylist,
                     selected_coupon=selected_coupon,
+                    stylist_reason=stylist_reason,
+                    coupon_reason=coupon_reason,
                     processed_at=datetime.now()
                 )
             except Exception as e:
