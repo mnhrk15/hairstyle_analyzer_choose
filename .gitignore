@@ -51,6 +51,7 @@ data/processed/
 models/trained/
 cache/
 output/
+temp/
 
 # Jupyter Notebook
 .ipynb_checkpoints
