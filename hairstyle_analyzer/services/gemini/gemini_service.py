@@ -161,57 +161,95 @@ class GeminiService:
             GeminiAPIError: API呼び出しに失敗した場合
         """
         try:
-            # 使用するモデルを選択
-            model = self.fallback_model if use_fallback else self.model
-            
-            # コンテンツのリスト
-            content = [prompt]
-            
-            # 画像がある場合は追加
-            if image_path:
-                image_parts = self._prepare_image(image_path)
-                content.append(image_parts)
-            
-            # 生成設定
-            generation_config = {
-                "max_output_tokens": self.config.max_tokens,
-                "temperature": self.config.temperature,
-                "response_mime_type": "application/json"
-            }
-            
-            # API呼び出しをasyncioで実行
-            # Gemini APIは直接asyncをサポートしていないため、スレッドプールで実行
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: model.generate_content(
-                    content,
-                    generation_config=generation_config
-                )
-            )
-            
-            # レスポンスのテキストを取得
-            return response.text
+            return await self._execute_api_call(prompt, image_path, use_fallback)
             
         except Exception as e:
-            error_msg = f"Gemini API呼び出しエラー (試行 {attempt}/{self.config.max_retries}): {str(e)}"
-            self.logger.error(error_msg)
+            return await self._handle_api_error(e, prompt, image_path, use_fallback, attempt)
+
+    async def _execute_api_call(self, prompt: str, image_path: Optional[Path] = None, use_fallback: bool = False) -> str:
+        """
+        実際のGemini API呼び出しを実行します。
+        
+        Args:
+            prompt: プロンプト
+            image_path: 画像ファイルのパス（オプション）
+            use_fallback: フォールバックモデルを使用するかどうか
             
-            if attempt >= self.config.max_retries:
-                if not use_fallback:
-                    # フォールバックモデルがまだ試されていない場合
-                    self.logger.info(f"プライマリモデル({self.config.model})の呼び出しに失敗、フォールバックモデル({self.config.fallback_model})を試行します")
-                    return await self._call_gemini_api(prompt, image_path, use_fallback=True, attempt=1)
-                else:
-                    # すべてのリトライとフォールバックが失敗した場合
-                    raise GeminiAPIError(
-                        f"すべての試行とフォールバックが失敗しました: {str(e)}",
-                        error_type="API_CALL_FAILED"
-                    ) from e
+        Returns:
+            APIレスポンステキスト
+        """
+        # 使用するモデルを選択
+        model = self.fallback_model if use_fallback else self.model
+        
+        # コンテンツのリスト
+        content = [prompt]
+        
+        # 画像がある場合は追加
+        if image_path:
+            image_parts = self._prepare_image(image_path)
+            content.append(image_parts)
+        
+        # 生成設定
+        generation_config = {
+            "max_output_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "response_mime_type": "application/json"
+        }
+        
+        # API呼び出しをasyncioで実行
+        # Gemini APIは直接asyncをサポートしていないため、スレッドプールで実行
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: model.generate_content(
+                content,
+                generation_config=generation_config
+            )
+        )
+        
+        # レスポンスのテキストを取得
+        return response.text
+
+    async def _handle_api_error(self, 
+                               exception: Exception, 
+                               prompt: str, 
+                               image_path: Optional[Path], 
+                               use_fallback: bool, 
+                               attempt: int) -> str:
+        """
+        API呼び出しエラーを処理します。
+        
+        Args:
+            exception: 発生した例外
+            prompt: プロンプト
+            image_path: 画像ファイルのパス
+            use_fallback: フォールバックモデルを使用するかどうか
+            attempt: 現在の試行回数
             
-            # 遅延を入れてリトライ
-            await asyncio.sleep(self.config.retry_delay * attempt)
-            return await self._call_gemini_api(prompt, image_path, use_fallback, attempt + 1)
+        Returns:
+            リトライ後のAPIレスポンス
+            
+        Raises:
+            GeminiAPIError: すべてのリトライとフォールバックが失敗した場合
+        """
+        error_msg = f"Gemini API呼び出しエラー (試行 {attempt}/{self.config.max_retries}): {str(exception)}"
+        self.logger.error(error_msg)
+        
+        if attempt >= self.config.max_retries:
+            if not use_fallback:
+                # フォールバックモデルがまだ試されていない場合
+                self.logger.info(f"プライマリモデル({self.config.model})の呼び出しに失敗、フォールバックモデル({self.config.fallback_model})を試行します")
+                return await self._call_gemini_api(prompt, image_path, use_fallback=True, attempt=1)
+            else:
+                # すべてのリトライとフォールバックが失敗した場合
+                raise GeminiAPIError(
+                    f"すべての試行とフォールバックが失敗しました: {str(exception)}",
+                    error_type="API_CALL_FAILED"
+                ) from exception
+        
+        # 遅延を入れてリトライ
+        await asyncio.sleep(self.config.retry_delay * attempt)
+        return await self._call_gemini_api(prompt, image_path, use_fallback, attempt + 1)
     
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
@@ -227,77 +265,127 @@ class GeminiService:
             GeminiAPIError: JSONのパースに失敗した場合
         """
         try:
-            # マークダウンのコードブロックを取り除く
-            clean_text = re.sub(r'```(?:json)?\s*(.*?)\s*```', r'\1', response_text, flags=re.DOTALL)
-            
-            # JSONの開始と終了の波括弧を探す
-            json_match = re.search(r'({.*})', clean_text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                
-                # 改行を整理してバックスラッシュをエスケープ
-                json_str = json_str.strip().replace('\n', ' ').replace('\\', '\\\\')
-                
-                # 引用符がない場合はJSONプロパティ名に引用符を追加
-                json_str = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1 "\2":', json_str)
-                
-                # JSONパース
-                return json.loads(json_str)
+            return self._extract_json_from_response(response_text)
         except Exception as e:
             self.logger.error(f"JSONパースエラー: {str(e)}, テキスト: {response_text}")
+            return self._extract_data_with_regex(response_text)
             
-            # 正規表現でJSONデータを直接抽出（フォールバック）
-            try:
-                # キーと値のペアを抽出
-                data = {}
-                
-                # カテゴリの抽出
-                category_match = re.search(r'"category"\s*:\s*"([^"]+)"', response_text)
-                if category_match:
-                    data["category"] = category_match.group(1)
-                
-                # 特徴の抽出
-                features = {}
-                feature_matches = re.finditer(r'"([^"]+)"\s*:\s*"([^"]+)"', response_text)
-                for match in feature_matches:
-                    key, value = match.groups()
-                    if key in ["color", "cut_technique", "styling", "impression"]:
-                        features[key] = value
-                
-                if features:
-                    data["features"] = features
-                
-                # キーワードの抽出
-                keywords_match = re.search(r'"keywords"\s*:\s*\[(.*?)\]', response_text, re.DOTALL)
-                if keywords_match:
-                    keywords_str = keywords_match.group(1)
-                    keywords = [k.strip(' "\'') for k in re.findall(r'"([^"]+)"', keywords_str)]
-                    data["keywords"] = keywords
-                else:
-                    data["keywords"] = []
-                
-                # クーポン・テンプレート選択用のデータ抽出
-                number_match = re.search(r'"(?:coupon_number|template_id)"\s*:\s*(\d+)', response_text)
-                if number_match:
-                    if "coupon_number" in response_text:
-                        data["coupon_number"] = int(number_match.group(1))
-                    else:
-                        data["template_id"] = int(number_match.group(1))
-                
-                reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', response_text)
-                if reason_match:
-                    data["reason"] = reason_match.group(1)
-                
-                # スタイリスト選択用のデータ抽出
-                stylist_match = re.search(r'"stylist_name"\s*:\s*"([^"]+)"', response_text)
-                if stylist_match:
-                    data["stylist_name"] = stylist_match.group(1)
-                
-                self.logger.info(f"正規表現でJSONデータを抽出しました")
-                return data
-            except Exception as nested_e:
-                self.logger.error(f"正規表現による抽出も失敗: {str(nested_e)}")
-                return {}
+    def _extract_json_from_response(self, response_text: str) -> Dict[str, Any]:
+        """
+        レスポンステキストからJSONデータを抽出してパースします。
+        
+        Args:
+            response_text: APIレスポンステキスト
+            
+        Returns:
+            パースされたJSONデータ
+            
+        Raises:
+            Exception: JSONの抽出やパースに失敗した場合
+        """
+        # マークダウンのコードブロックを取り除く
+        clean_text = re.sub(r'```(?:json)?\s*(.*?)\s*```', r'\1', response_text, flags=re.DOTALL)
+        
+        # JSONの開始と終了の波括弧を探す
+        json_match = re.search(r'({.*})', clean_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+            
+            # 改行を整理してバックスラッシュをエスケープ
+            json_str = json_str.strip().replace('\n', ' ').replace('\\', '\\\\')
+            
+            # 引用符がない場合はJSONプロパティ名に引用符を追加
+            json_str = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1 "\2":', json_str)
+            
+            # JSONパース
+            return json.loads(json_str)
+        
+        raise ValueError("レスポンスからJSONパターンが見つかりませんでした")
+    
+    def _extract_data_with_regex(self, response_text: str) -> Dict[str, Any]:
+        """
+        正規表現を使用してレスポンステキストから直接データを抽出します。
+        JSONパースに失敗した場合のフォールバックとして使用します。
+        
+        Args:
+            response_text: APIレスポンステキスト
+            
+        Returns:
+            抽出されたデータの辞書
+        """
+        try:
+            data = {}
+            
+            # 各セクションごとにデータを抽出
+            data.update(self._extract_category_data(response_text))
+            data.update(self._extract_features_data(response_text))
+            data.update(self._extract_keywords_data(response_text))
+            data.update(self._extract_coupon_template_data(response_text))
+            data.update(self._extract_stylist_data(response_text))
+            
+            self.logger.info("正規表現でJSONデータを抽出しました")
+            return data
+            
+        except Exception as e:
+            self.logger.error(f"正規表現による抽出も失敗: {str(e)}")
+            return {}
+    
+    def _extract_category_data(self, text: str) -> Dict[str, Any]:
+        """カテゴリ情報を抽出"""
+        data = {}
+        category_match = re.search(r'"category"\s*:\s*"([^"]+)"', text)
+        if category_match:
+            data["category"] = category_match.group(1)
+        return data
+    
+    def _extract_features_data(self, text: str) -> Dict[str, Any]:
+        """特徴情報を抽出"""
+        data = {}
+        features = {}
+        feature_matches = re.finditer(r'"([^"]+)"\s*:\s*"([^"]+)"', text)
+        for match in feature_matches:
+            key, value = match.groups()
+            if key in ["color", "cut_technique", "styling", "impression"]:
+                features[key] = value
+        
+        if features:
+            data["features"] = features
+        return data
+    
+    def _extract_keywords_data(self, text: str) -> Dict[str, Any]:
+        """キーワード情報を抽出"""
+        data = {}
+        keywords_match = re.search(r'"keywords"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+        if keywords_match:
+            keywords_str = keywords_match.group(1)
+            keywords = [k.strip(' "\'') for k in re.findall(r'"([^"]+)"', keywords_str)]
+            data["keywords"] = keywords
+        else:
+            data["keywords"] = []
+        return data
+    
+    def _extract_coupon_template_data(self, text: str) -> Dict[str, Any]:
+        """クーポン・テンプレート選択用のデータ抽出"""
+        data = {}
+        number_match = re.search(r'"(?:coupon_number|template_id)"\s*:\s*(\d+)', text)
+        if number_match:
+            if "coupon_number" in text:
+                data["coupon_number"] = int(number_match.group(1))
+            else:
+                data["template_id"] = int(number_match.group(1))
+        
+        reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', text)
+        if reason_match:
+            data["reason"] = reason_match.group(1)
+        return data
+    
+    def _extract_stylist_data(self, text: str) -> Dict[str, Any]:
+        """スタイリスト選択用のデータ抽出"""
+        data = {}
+        stylist_match = re.search(r'"stylist_name"\s*:\s*"([^"]+)"', text)
+        if stylist_match:
+            data["stylist_name"] = stylist_match.group(1)
+        return data
     
     @async_with_error_handling(GeminiAPIError, "画像分析に失敗しました")
     async def analyze_image(self, image_path: Path, categories: List[str]) -> Optional[StyleAnalysisProtocol]:

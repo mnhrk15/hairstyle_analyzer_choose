@@ -14,6 +14,7 @@ from ..data.models import StyleAnalysis, AttributeAnalysis
 from ..data.interfaces import StyleAnalysisProtocol, AttributeAnalysisProtocol, CacheManagerProtocol
 from ..services.gemini import GeminiService
 from ..utils.errors import GeminiAPIError, ImageError, async_with_error_handling
+from ..utils.cache_decorators import cacheable
 
 
 class ImageAnalyzer:
@@ -38,14 +39,15 @@ class ImageAnalyzer:
         self.cache_manager = cache_manager
         self.use_cache = use_cache
     
-    async def analyze_image(self, image_path: Path, categories: List[str], use_cache: Optional[bool] = None) -> Optional[StyleAnalysisProtocol]:
+    @cacheable(lambda self, image_path, *args, **kwargs: f"style_analysis:{image_path.name}")
+    @async_with_error_handling(GeminiAPIError, "画像分析に失敗しました")
+    async def analyze_image(self, image_path: Path, categories: List[str]) -> Optional[StyleAnalysisProtocol]:
         """
         画像を分析します。
         
         Args:
             image_path: 画像ファイルのパス
             categories: カテゴリリスト
-            use_cache: キャッシュを使用するかどうか（Noneの場合はインスタンスの設定を使用）
             
         Returns:
             分析結果、またはエラー時はNone
@@ -56,27 +58,9 @@ class ImageAnalyzer:
         """
         self.logger.info(f"画像分析開始: {image_path.name}")
         
-        # キャッシュを使用するかどうかの判定
-        should_use_cache = self.use_cache if use_cache is None else use_cache
-        
-        # キャッシュキーを事前に定義（スコープの問題を避けるため）
-        cache_key = f"style_analysis:{image_path.name}"
-        
-        # キャッシュチェック（キャッシュを使用する場合のみ）
-        if should_use_cache and self.cache_manager:
-            cached_result = self.cache_manager.get(cache_key)
-            if cached_result:
-                self.logger.info(f"キャッシュから分析結果を取得: {image_path.name}")
-                return cached_result
-        
         # Gemini APIで画像を分析
         try:
             analysis = await self.gemini_service.analyze_image(image_path, categories)
-            
-            # 結果をキャッシュに保存
-            if analysis and self.cache_manager:
-                self.cache_manager.set(cache_key, analysis)
-                
             return analysis
             
         except (GeminiAPIError, ImageError) as e:
@@ -87,13 +71,14 @@ class ImageAnalyzer:
             self.logger.error(f"予期しないエラー: {str(e)}")
             return None
     
-    async def analyze_attributes(self, image_path: Path, use_cache: Optional[bool] = None) -> Optional[AttributeAnalysisProtocol]:
+    @cacheable(lambda self, image_path, *args, **kwargs: f"attribute_analysis:{image_path.name}")
+    @async_with_error_handling(GeminiAPIError, "属性分析に失敗しました")
+    async def analyze_attributes(self, image_path: Path) -> Optional[AttributeAnalysisProtocol]:
         """
         画像の属性（性別・髪の長さ）を分析します。
         
         Args:
             image_path: 画像ファイルのパス
-            use_cache: キャッシュを使用するかどうか（Noneの場合はインスタンスの設定を使用）
             
         Returns:
             属性分析結果、またはエラー時はNone
@@ -104,27 +89,9 @@ class ImageAnalyzer:
         """
         self.logger.info(f"属性分析開始: {image_path.name}")
         
-        # キャッシュを使用するかどうかの判定
-        should_use_cache = self.use_cache if use_cache is None else use_cache
-        
-        # キャッシュキーを事前に定義（スコープの問題を避けるため）
-        cache_key = f"attribute_analysis:{image_path.name}"
-        
-        # キャッシュチェック（キャッシュを使用する場合のみ）
-        if should_use_cache and self.cache_manager:
-            cached_result = self.cache_manager.get(cache_key)
-            if cached_result:
-                self.logger.info(f"キャッシュから属性分析結果を取得: {image_path.name}")
-                return cached_result
-        
         # Gemini APIで属性を分析
         try:
             attributes = await self.gemini_service.analyze_attributes(image_path)
-            
-            # 結果をキャッシュに保存
-            if attributes and self.cache_manager:
-                self.cache_manager.set(cache_key, attributes)
-                
             return attributes
             
         except (GeminiAPIError, ImageError) as e:
@@ -153,8 +120,8 @@ class ImageAnalyzer:
         should_use_cache = self.use_cache if use_cache is None else use_cache
         
         # 並列で両方の分析を実行
-        style_task = self.analyze_image(image_path, categories, use_cache=should_use_cache)
-        attribute_task = self.analyze_attributes(image_path, use_cache=should_use_cache)
+        style_task = self.analyze_image(image_path, categories)
+        attribute_task = self.analyze_attributes(image_path)
         
         # 両方の結果を待機
         results = await asyncio.gather(style_task, attribute_task, return_exceptions=True)
