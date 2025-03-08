@@ -41,6 +41,7 @@ SESSION_SALON_URL = "salon_url"
 SESSION_PROGRESS = "progress"
 SESSION_STYLISTS = "stylists"
 SESSION_COUPONS = "coupons"
+SESSION_USE_CACHE = "use_cache"
 
 
 def init_session_state():
@@ -80,8 +81,20 @@ def update_progress(current, total, message=""):
         st.session_state[SESSION_PROGRESS] = progress
 
 
-async def process_images(processor, image_paths, stylists=None, coupons=None, progress_callback=None):
-    """画像処理を実行する関数"""
+async def process_images(processor, image_paths, stylists=None, coupons=None, progress_callback=None, use_cache=None):
+    """画像処理を実行する関数
+    
+    Args:
+        processor: メインプロセッサー
+        image_paths: 画像ファイルのパスリスト
+        stylists: スタイリスト情報のリスト（オプション）
+        coupons: クーポン情報のリスト（オプション）
+        progress_callback: 進捗コールバック関数（オプション）
+        use_cache: キャッシュを使用するかどうか（Noneの場合はプロセッサーの設定を使用）
+    
+    Returns:
+        処理結果のリスト
+    """
     results = []
     total = len(image_paths)
     
@@ -89,9 +102,9 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, pr
         try:
             # 1画像の処理（スタイリストとクーポンのデータを渡す）
             if stylists and coupons:
-                result = await processor.process_single_image(image_path, stylists, coupons)
+                result = await processor.process_single_image(image_path, stylists, coupons, use_cache=use_cache)
             else:
-                result = await processor.process_single_image(image_path)
+                result = await processor.process_single_image(image_path, use_cache=use_cache)
             
             results.append(result)
             
@@ -124,8 +137,11 @@ def create_processor(config_manager):
     # GeminiServiceの初期化
     gemini_service = GeminiService(config_manager.gemini)
     
+    # キャッシュ使用設定の取得
+    use_cache = st.session_state.get(SESSION_USE_CACHE, False)
+    
     # 各コアコンポーネントの初期化
-    image_analyzer = ImageAnalyzer(gemini_service, cache_manager)
+    image_analyzer = ImageAnalyzer(gemini_service, cache_manager, use_cache=use_cache)
     template_matcher = TemplateMatcher(template_manager)
     style_matcher = StyleMatchingService(gemini_service)
     excel_exporter = ExcelExporter(config_manager.excel)
@@ -138,7 +154,8 @@ def create_processor(config_manager):
         excel_exporter=excel_exporter,
         cache_manager=cache_manager,
         batch_size=config_manager.processing.batch_size,
-        api_delay=config_manager.processing.api_delay
+        api_delay=config_manager.processing.api_delay,
+        use_cache=use_cache
     )
     
     return processor
@@ -556,8 +573,26 @@ def render_sidebar(config_manager):
                 except Exception as e:
                     st.error(f"設定の保存中にエラーが発生しました: {str(e)}")
         
-        # キャッシュクリアボタン
+        # キャッシュ管理セクション
         st.header("キャッシュ管理")
+        
+        # キャッシュ使用設定
+        use_cache = st.checkbox(
+            "キャッシュを使用する", 
+            value=st.session_state.get(SESSION_USE_CACHE, False),
+            help="チェックすると、以前の分析結果をキャッシュから取得します。新しい分析結果が必要な場合はオフにしてください。"
+        )
+        
+        # キャッシュ使用設定をセッションに保存
+        st.session_state[SESSION_USE_CACHE] = use_cache
+        
+        # プロセッサーがすでに存在する場合は設定を更新
+        if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
+            processor = st.session_state[SESSION_PROCESSOR]
+            processor.set_use_cache(use_cache)
+            st.session_state[SESSION_PROCESSOR] = processor
+        
+        # キャッシュクリアボタン
         if st.button("キャッシュをクリア"):
             try:
                 # キャッシュマネージャーの初期化
@@ -652,8 +687,11 @@ def render_main_content():
                     if not coupons:
                         st.warning("クーポン情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
                     
-                    # 処理の実行（スタイリストとクーポンのデータを渡す）
-                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, update_progress))
+                    # キャッシュ使用設定の取得
+                    use_cache = st.session_state.get(SESSION_USE_CACHE, False)
+                    
+                    # 処理の実行（スタイリストとクーポンのデータとキャッシュ設定を渡す）
+                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, update_progress, use_cache=use_cache))
                     
                     # 処理完了
                     progress_bar.progress(1.0)

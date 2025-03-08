@@ -50,7 +50,8 @@ class MainProcessor(MainProcessorProtocol):
         batch_size: int = 5,
         api_delay: float = 1.0,
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
+        use_cache: bool = False
     ):
         """
         初期化
@@ -78,6 +79,10 @@ class MainProcessor(MainProcessorProtocol):
         self.api_delay = api_delay
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.use_cache = use_cache
+        
+        # 画像アナライザーにキャッシュ設定を反映
+        self.image_analyzer.use_cache = use_cache
         
         # 処理結果
         self.results: List[ProcessResult] = []
@@ -106,7 +111,7 @@ class MainProcessor(MainProcessorProtocol):
         if self.progress_callback:
             self.progress_callback(current, total, message)
     
-    async def process_single_image(self, image_path: Path, stylists=None, coupons=None) -> Optional[ProcessResultProtocol]:
+    async def process_single_image(self, image_path: Path, stylists=None, coupons=None, use_cache: Optional[bool] = None) -> Optional[ProcessResultProtocol]:
         """
         単一の画像を処理します。
         
@@ -124,9 +129,14 @@ class MainProcessor(MainProcessorProtocol):
         """
         self.logger.info(f"画像処理開始: {image_path.name}")
         
-        # キャッシュチェック
-        if self.cache_manager:
-            cache_key = f"process_result:{image_path.name}"
+        # キャッシュを使用するかどうかの判定
+        should_use_cache = self.use_cache if use_cache is None else use_cache
+        
+        # キャッシュキーを事前に定義（スコープの問題を避けるため）
+        cache_key = f"process_result:{image_path.name}"
+        
+        # キャッシュチェック（キャッシュを使用する場合のみ）
+        if should_use_cache and self.cache_manager:
             cached_result = self.cache_manager.get(cache_key)
             if cached_result:
                 self.logger.info(f"キャッシュから処理結果を取得: {image_path.name}")
@@ -135,7 +145,7 @@ class MainProcessor(MainProcessorProtocol):
         try:
             # 1. スタイル分析と属性分析を並列実行
             categories = self.template_matcher.template_manager.get_all_categories()
-            style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories)
+            style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories, use_cache=should_use_cache)
             
             if not style_analysis or not attribute_analysis:
                 self.logger.error(f"画像分析に失敗しました: {image_path.name}")
@@ -254,7 +264,7 @@ class MainProcessor(MainProcessorProtocol):
                 self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
                 raise ProcessingError(f"処理結果の作成に失敗しました: {str(e)}")
             
-            # 結果をキャッシュに保存
+            # 結果をキャッシュに保存（常にキャッシュには保存する）
             if self.cache_manager:
                 self.cache_manager.set(cache_key, result)
             
@@ -271,7 +281,7 @@ class MainProcessor(MainProcessorProtocol):
             raise ProcessingError(f"画像処理中に予期しないエラーが発生しました: {str(e)}", 
                                 image_path=str(image_path)) from e
     
-    async def process_images(self, image_paths: List[Path]) -> List[ProcessResultProtocol]:
+    async def process_images(self, image_paths: List[Path], use_cache: Optional[bool] = None) -> List[ProcessResultProtocol]:
         """
         複数の画像を処理します。
         
@@ -314,8 +324,11 @@ class MainProcessor(MainProcessorProtocol):
             self.logger.info(batch_message)
             self._update_progress(processed_count, total_images, batch_message)
             
+            # キャッシュを使用するかどうかの判定
+            should_use_cache = self.use_cache if use_cache is None else use_cache
+            
             # バッチ内の画像を並列処理
-            tasks = [self.process_single_image(image_path) for image_path in batch]
+            tasks = [self.process_single_image(image_path, use_cache=should_use_cache) for image_path in batch]
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 結果の処理
@@ -347,7 +360,8 @@ class MainProcessor(MainProcessorProtocol):
         self, 
         image_paths: List[Path],
         stylists: List[StylistInfoProtocol],
-        coupons: List[CouponInfoProtocol]
+        coupons: List[CouponInfoProtocol],
+        use_cache: Optional[bool] = None
     ) -> List[ProcessResultProtocol]:
         """
         外部データ（スタイリスト・クーポン情報）を使用して複数の画像を処理します。
@@ -404,8 +418,11 @@ class MainProcessor(MainProcessorProtocol):
             # バッチ内の各画像を順次処理
             for image_path in batch:
                 try:
-                    # キャッシュチェック
-                    if self.cache_manager:
+                    # キャッシュを使用するかどうかの判定
+                    should_use_cache = self.use_cache if use_cache is None else use_cache
+                    
+                    # キャッシュチェック（キャッシュを使用する場合のみ）
+                    if should_use_cache and self.cache_manager:
                         cache_key = f"process_result_ext:{image_path.name}"
                         cached_result = self.cache_manager.get(cache_key)
                         if cached_result:
@@ -417,7 +434,7 @@ class MainProcessor(MainProcessorProtocol):
                     
                     # 1. スタイル分析と属性分析を並列実行
                     categories = self.template_matcher.template_manager.get_all_categories()
-                    style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories)
+                    style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories, use_cache=should_use_cache)
                     
                     if not style_analysis or not attribute_analysis:
                         self.logger.error(f"画像分析に失敗しました: {image_path.name}")
@@ -594,31 +611,32 @@ class MainProcessor(MainProcessorProtocol):
         self.results = []
         self.logger.info("処理結果をクリアしました")
     
-    async def retry_failed_images(self, image_paths: List[Path]) -> List[ProcessResultProtocol]:
+    def set_use_cache(self, use_cache: bool) -> None:
+        """
+        キャッシュを使用するかどうかを設定します。
+        
+        Args:
+            use_cache: キャッシュを使用するかどうか
+        """
+        self.use_cache = use_cache
+        self.image_analyzer.use_cache = use_cache
+        self.logger.info(f"キャッシュ使用設定を変更しました: {use_cache}")
+    
+    async def retry_failed_images(self, image_paths: List[Path], use_cache: Optional[bool] = None) -> List[ProcessResultProtocol]:
         """
         失敗した画像を再処理します。
         
         Args:
             image_paths: 再処理する画像のパスリスト
+            use_cache: キャッシュを使用するかどうか（Noneの場合はインスタンスの設定を使用）
             
         Returns:
             処理結果のリスト
         """
         self.logger.info(f"失敗画像の再処理開始: {len(image_paths)}枚")
         
-        # 現在のキャッシュ設定を保存
-        cache_enabled = self.cache_manager is not None
-        
-        # 再処理用にキャッシュを無効化
-        self.cache_manager = None
+        # キャッシュを使用するかどうかの判定
+        should_use_cache = self.use_cache if use_cache is None else use_cache
         
         # 画像を再処理
-        results = await self.process_images(image_paths)
-        
-        # 元のキャッシュ設定を復元
-        if cache_enabled:
-            # ここでキャッシュマネージャーを再設定する必要があります
-            # 実際の実装では適切なキャッシュマネージャーを設定してください
-            pass
-        
-        return results
+        return await self.process_images(image_paths, use_cache=should_use_cache)
