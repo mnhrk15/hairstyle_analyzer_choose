@@ -108,7 +108,7 @@ gemini:
 
 # スクレイパー設定
 scraper:
-  base_url: "https://beauty.hotpepper.jp/slnH000492277/"  # スクレイピング対象のベースURL
+  base_url: ""  # スクレイピング対象のベースURL
   stylist_link_selector: "p.mT10.fs16.b > a[href*='/stylist/T']"  # スタイリストリンクのセレクタ
   stylist_name_selector: "p.mT10.fs16.b > a"  # スタイリスト名のセレクタ
   stylist_specialties_selector: "div.mT5.fs10 > span.fgPink"  # スタイリスト得意技術のセレクタ
