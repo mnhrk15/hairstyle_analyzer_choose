@@ -134,7 +134,7 @@ gemini:
     max_templates: 50            # 一度に処理する最大テンプレート数
     use_category_filter: true    # カテゴリでフィルタリングするかどうか
     fallback_on_failure: true    # 失敗時に従来のスコアリングを使用するかどうか
-    cache_results: true          # 結果をキャッシュするかどうか
+    cache_results: false         # 結果をキャッシュするかどうか
     timeout_seconds: 30          # APIタイムアウト（秒）
 
 # スクレイパー設定
