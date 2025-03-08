@@ -14,11 +14,12 @@ import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
 import re
+import random
 
 import google.generativeai as genai
 from pydantic import ValidationError
 
-from ...data.models import StyleAnalysis, StyleFeatures, AttributeAnalysis, StylistInfo, CouponInfo, GeminiConfig
+from ...data.models import StyleAnalysis, StyleFeatures, AttributeAnalysis, StylistInfo, CouponInfo, GeminiConfig, Template
 from ...data.interfaces import StyleAnalysisProtocol, AttributeAnalysisProtocol, StylistInfoProtocol, CouponInfoProtocol
 from ...utils.errors import GeminiAPIError, ImageError, APIError, async_with_error_handling
 from ...utils.image_utils import encode_image, is_valid_image
@@ -214,7 +215,7 @@ class GeminiService:
     
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
-        APIレスポンスからJSONデータを抽出します。
+        APIレスポンスからJSONデータを抽出・パースします。
         
         Args:
             response_text: APIレスポンステキスト
@@ -226,71 +227,77 @@ class GeminiService:
             GeminiAPIError: JSONのパースに失敗した場合
         """
         try:
-            # JSONブロックを抽出
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```|({[\s\S]*?})', response_text)
+            # マークダウンのコードブロックを取り除く
+            clean_text = re.sub(r'```(?:json)?\s*(.*?)\s*```', r'\1', response_text, flags=re.DOTALL)
+            
+            # JSONの開始と終了の波括弧を探す
+            json_match = re.search(r'({.*})', clean_text, re.DOTALL)
             if json_match:
-                json_str = json_match.group(1) if json_match.group(1) else json_match.group(2)
-                # JSONの修正を試みる
-                try:
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
-                    # コンマの欠落などの一般的なエラーを修正
-                    fixed_json = re.sub(r'"\s*\n\s*}', '",\n}', json_str)
-                    fixed_json = re.sub(r'"\s*\n\s*]', '",\n]', fixed_json)
-                    return json.loads(fixed_json)
-            
-            # JSONブロックが見つからない場合は、テキスト全体をJSONとしてパース
-            return json.loads(response_text)
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSONパースエラー: {e}, テキスト: {response_text}")
-            
-            # 応急処置: 数字だけの回答の場合
-            if re.match(r'^\s*\d+\s*$', response_text.strip()):
-                number = int(response_text.strip())
-                self.logger.info(f"数字のみの回答を検出: {number}")
-                return {"coupon_number": number}
-            
-            # キーと値のペアを抽出する試み
-            try:
-                # 画像分析結果の場合のフォールバック
-                if "category" in response_text and "features" in response_text:
-                    category_match = re.search(r'"category"\s*:\s*"([^"]+)"', response_text)
-                    color_match = re.search(r'"color"\s*:\s*"([^"]+)"', response_text)
-                    cut_match = re.search(r'"cut_technique"\s*:\s*"([^"]+)"', response_text)
-                    styling_match = re.search(r'"styling"\s*:\s*"([^"]+)"', response_text)
-                    impression_match = re.search(r'"impression"\s*:\s*"([^"]+)"', response_text)
-                    
-                    result = {
-                        "category": category_match.group(1) if category_match else "不明",
-                        "features": {
-                            "color": color_match.group(1) if color_match else "不明",
-                            "cut_technique": cut_match.group(1) if cut_match else "不明",
-                            "styling": styling_match.group(1) if styling_match else "不明",
-                            "impression": impression_match.group(1) if impression_match else "不明"
-                        }
-                    }
-                    self.logger.info("正規表現でJSONデータを抽出しました")
-                    return result
+                json_str = json_match.group(1)
                 
-                # クーポン選択結果の場合のフォールバック
-                coupon_number_match = re.search(r'"coupon_number"\s*:\s*(\d+)', response_text)
-                if coupon_number_match:
-                    coupon_number = int(coupon_number_match.group(1))
-                    reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', response_text)
-                    reason = reason_match.group(1) if reason_match else "理由なし"
-                    
-                    return {
-                        "coupon_number": coupon_number,
-                        "reason": reason
-                    }
-            except Exception as regex_error:
-                self.logger.error(f"正規表現による抽出も失敗: {regex_error}")
+                # 改行を整理してバックスラッシュをエスケープ
+                json_str = json_str.strip().replace('\n', ' ').replace('\\', '\\\\')
+                
+                # 引用符がない場合はJSONプロパティ名に引用符を追加
+                json_str = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1 "\2":', json_str)
+                
+                # JSONパース
+                return json.loads(json_str)
+        except Exception as e:
+            self.logger.error(f"JSONパースエラー: {str(e)}, テキスト: {response_text}")
             
-            raise GeminiAPIError(
-                f"JSONパースエラー: {str(e)}",
-                error_type="JSON_PARSE_ERROR",
-                details={"response_text": response_text}
-            ) from e
+            # 正規表現でJSONデータを直接抽出（フォールバック）
+            try:
+                # キーと値のペアを抽出
+                data = {}
+                
+                # カテゴリの抽出
+                category_match = re.search(r'"category"\s*:\s*"([^"]+)"', response_text)
+                if category_match:
+                    data["category"] = category_match.group(1)
+                
+                # 特徴の抽出
+                features = {}
+                feature_matches = re.finditer(r'"([^"]+)"\s*:\s*"([^"]+)"', response_text)
+                for match in feature_matches:
+                    key, value = match.groups()
+                    if key in ["color", "cut_technique", "styling", "impression"]:
+                        features[key] = value
+                
+                if features:
+                    data["features"] = features
+                
+                # キーワードの抽出
+                keywords_match = re.search(r'"keywords"\s*:\s*\[(.*?)\]', response_text, re.DOTALL)
+                if keywords_match:
+                    keywords_str = keywords_match.group(1)
+                    keywords = [k.strip(' "\'') for k in re.findall(r'"([^"]+)"', keywords_str)]
+                    data["keywords"] = keywords
+                else:
+                    data["keywords"] = []
+                
+                # クーポン・テンプレート選択用のデータ抽出
+                number_match = re.search(r'"(?:coupon_number|template_id)"\s*:\s*(\d+)', response_text)
+                if number_match:
+                    if "coupon_number" in response_text:
+                        data["coupon_number"] = int(number_match.group(1))
+                    else:
+                        data["template_id"] = int(number_match.group(1))
+                
+                reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', response_text)
+                if reason_match:
+                    data["reason"] = reason_match.group(1)
+                
+                # スタイリスト選択用のデータ抽出
+                stylist_match = re.search(r'"stylist_name"\s*:\s*"([^"]+)"', response_text)
+                if stylist_match:
+                    data["stylist_name"] = stylist_match.group(1)
+                
+                self.logger.info(f"正規表現でJSONデータを抽出しました")
+                return data
+            except Exception as nested_e:
+                self.logger.error(f"正規表現による抽出も失敗: {str(nested_e)}")
+                return {}
     
     @async_with_error_handling(GeminiAPIError, "画像分析に失敗しました")
     async def analyze_image(self, image_path: Path, categories: List[str]) -> Optional[StyleAnalysisProtocol]:
@@ -311,24 +318,61 @@ class GeminiService:
         # カテゴリ一覧の作成
         categories_str = "\n".join([f"- {category}" for category in categories])
         
-        # プロンプトの作成
-        prompt = self._format_prompt(
-            template=self.config.prompt_template,
-            categories=categories_str,
-            category="",  # JSONの"category"フィールド用
-            color="",
-            cut_technique="",
-            styling="",
-            impression=""
-        )
+        # 改良されたプロンプト
+        improved_prompt = f"""
+この画像のヘアスタイルを詳細に分析し、以下のJSON形式で出力してください。
+
+1. カテゴリ (以下から1つだけ選択してください):
+{categories_str}
+
+2. 特徴:
+   - 髪色: 色調や特徴を詳しく
+   - カット技法: レイヤー、グラデーション、ボブなど
+   - スタイリング: ストレート、ウェーブ、パーマなど
+   - 印象: フェミニン、クール、ナチュラルなど
+
+3. キーワード: ヘアスタイルを表す簡潔な単語や句を5つ
+
+必ず以下の完全なJSON形式で結果を出力してください。キーワードは必ず5つ含めてください：
+{{
+  "category": "カテゴリ名",
+  "features": {{
+    "color": "詳細な色の説明",
+    "cut_technique": "カット技法の説明",
+    "styling": "スタイリング方法の説明",
+    "impression": "全体的な印象"
+  }},
+  "keywords": ["キーワード1", "キーワード2", "キーワード3", "キーワード4", "キーワード5"]
+}}
+"""
         
         # API呼び出し
-        response_text = await self._call_gemini_api(prompt, image_path)
+        response_text = await self._call_gemini_api(improved_prompt, image_path)
         
         # JSONとしてパース
         json_data = self._parse_json_response(response_text)
         
         try:
+            # キーワードがない場合は空のリストを設定
+            if "keywords" not in json_data or not json_data["keywords"]:
+                self.logger.warning("キーワードが見つかりません。空のリストを使用します。")
+                json_data["keywords"] = []
+            
+            # 特徴が辞書でない場合は修正
+            if "features" not in json_data or not isinstance(json_data["features"], dict):
+                self.logger.warning("特徴が見つからないか無効です。デフォルト値を使用します。")
+                json_data["features"] = {
+                    "color": "不明",
+                    "cut_technique": "不明",
+                    "styling": "不明",
+                    "impression": "不明"
+                }
+            
+            # 必須のフィールドがない場合はデフォルト値を設定
+            for field in ["color", "cut_technique", "styling", "impression"]:
+                if field not in json_data["features"]:
+                    json_data["features"][field] = "不明"
+            
             # 特徴データを作成
             features = StyleFeatures(
                 color=json_data["features"]["color"],
@@ -337,23 +381,24 @@ class GeminiService:
                 impression=json_data["features"]["impression"]
             )
             
+            # カテゴリが含まれていない場合はデフォルト値を設定
+            if "category" not in json_data or not json_data["category"]:
+                self.logger.warning("カテゴリが見つかりません。最初のカテゴリを使用します。")
+                json_data["category"] = categories[0] if categories else "不明"
+            
             # 分析結果を作成
             analysis = StyleAnalysis(
                 category=json_data["category"],
                 features=features,
-                keywords=json_data.get("keywords", [])
+                keywords=json_data["keywords"]
             )
             
             self.logger.info(f"画像分析完了: カテゴリ={analysis.category}, キーワード数={len(analysis.keywords)}")
             return analysis
             
-        except (KeyError, ValidationError) as e:
-            self.logger.error(f"分析結果のパースエラー: {e}, データ: {json_data}")
-            raise GeminiAPIError(
-                f"分析結果のデータ変換に失敗: {str(e)}",
-                error_type="DATA_VALIDATION_ERROR",
-                details={"json_data": json_data}
-            ) from e
+        except Exception as e:
+            self.logger.error(f"分析結果の作成に失敗しました: {str(e)}")
+            return None
     
     @async_with_error_handling(GeminiAPIError, "属性分析に失敗しました")
     async def analyze_attributes(self, image_path: Path) -> Optional[AttributeAnalysisProtocol]:
@@ -705,3 +750,194 @@ class GeminiService:
                 error_type="DATA_VALIDATION_ERROR",
                 details={"json_data": json_data}
             ) from e
+
+    @async_with_error_handling(GeminiAPIError, "テンプレート選択に失敗しました")
+    async def select_best_template(
+        self,
+        image_path: Path,
+        templates: List[Template],
+        analysis: Optional[StyleAnalysisProtocol] = None,
+        category_filter: bool = False
+    ) -> Tuple[int, str]:
+        """
+        画像と分析結果に基づいて最適なテンプレートをAIが選択します。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            templates: テンプレートのリスト
+            analysis: 事前実行された画像分析結果（オプション）
+            category_filter: カテゴリでフィルタリングするかどうか
+            
+        Returns:
+            (選択されたテンプレートのインデックス, 選択理由)のタプル
+            
+        Raises:
+            GeminiAPIError: API呼び出しに失敗した場合
+            ValueError: テンプレートリストが空の場合
+            GeminiAPIError: テンプレート選択に失敗した場合
+        """
+        # テンプレートリストの検証
+        if not templates:
+            raise ValueError("テンプレートリストが空です")
+        
+        self.logger.info(f"AIによるテンプレート選択開始: {len(templates)}件のテンプレート")
+        
+        # テンプレートリストのフォーマット
+        templates_text = self._format_templates_for_matching(templates)
+        
+        # 分析結果の情報をフォーマット
+        analysis_info = ""
+        if analysis:
+            analysis_info = f"""
+カテゴリ: {analysis.category}
+特徴:
+- 髪色: {analysis.features.color}
+- カット技法: {analysis.features.cut_technique}
+- スタイリング: {analysis.features.styling}
+- 印象: {analysis.features.impression}
+キーワード: {', '.join(analysis.keywords)}
+"""
+        
+        # プロンプトの改善
+        improved_prompt = f"""
+あなたはヘアスタイルの専門家です。この画像のヘアスタイルに最適なテンプレートを選択してください。
+
+【画像分析結果】
+{analysis_info}
+
+【テンプレート一覧】
+{templates_text}
+
+選択の際は以下の点を重視してください：
+1. 画像のヘアスタイル・髪色・カット技法・スタイリング方法が最も合うもの
+2. 雰囲気やイメージが画像と一致するもの
+3. ターゲット層（性別・年齢）が合っているもの
+
+必ず以下のJSON形式で回答してください：
+{{
+  "template_id": 選択したテンプレート番号（0から{len(templates)-1}までの整数）,
+  "reason": "このテンプレートを選んだ詳細な理由の説明（カットスタイル、髪色、全体的な印象などの観点から）"
+}}
+"""
+        
+        # Gemini APIの呼び出し
+        response_text = await self._call_gemini_api(improved_prompt, image_path)
+        
+        # JSONレスポンスの解析
+        result = self._parse_json_response(response_text)
+        
+        if not result or "template_id" not in result:
+            error_msg = "AIからの応答が無効でした"
+            self.logger.warning(f"テンプレート選択の応答が無効です: {response_text}")
+            raise GeminiAPIError(error_msg, error_type="INVALID_RESPONSE", details={"response": response_text})
+        
+        template_id = result.get("template_id")
+        reason = result.get("reason", "理由は提供されませんでした")
+        
+        # テンプレートIDの検証
+        if not isinstance(template_id, int) or template_id < 0 or template_id >= len(templates):
+            self.logger.warning(f"無効なテンプレートID: {template_id}, 範囲外です")
+            
+            # 数値に変換を試みる
+            if isinstance(template_id, str) and template_id.isdigit():
+                template_id = int(template_id)
+                if 0 <= template_id < len(templates):
+                    self.logger.info(f"文字列から数値に変換しました: {template_id}")
+                    return template_id, reason
+            
+            # それでも無効な場合は例外を発生
+            raise GeminiAPIError(
+                f"無効なテンプレートID: {template_id} (範囲: 0-{len(templates)-1})",
+                error_type="INVALID_TEMPLATE_ID",
+                details={"template_id": template_id, "valid_range": f"0-{len(templates)-1}"}
+            )
+        
+        self.logger.info(f"AIがテンプレートを選択しました: ID={template_id}")
+        return template_id, reason
+    
+    def _format_templates_for_matching(self, templates: List[Template]) -> str:
+        """
+        テンプレートリストをAIマッチング用にフォーマットします。
+        
+        Args:
+            templates: テンプレートのリスト
+            
+        Returns:
+            フォーマットされたテンプレート情報テキスト
+        """
+        formatted_text = "以下のテンプレートから最適なものを選んでください:\n\n"
+        
+        for i, template in enumerate(templates):
+            formatted_text += f"テンプレート {i}:\n"
+            formatted_text += f"カテゴリ: {template.category}\n"
+            formatted_text += f"タイトル: {template.title}\n"
+            formatted_text += f"メニュー: {template.menu}\n"
+            formatted_text += f"コメント: {template.comment}\n"
+            formatted_text += f"ハッシュタグ: {template.hashtag}\n\n"
+        
+        return formatted_text
+
+    @async_with_error_handling(GeminiAPIError, "カテゴリ選択に失敗しました")
+    async def get_matching_category(self, image_path: Path, available_categories: List[str]) -> str:
+        """
+        画像に合った最適なカテゴリをGeminiに選択してもらいます
+        
+        Args:
+            image_path: 画像ファイルのパス
+            available_categories: 利用可能なカテゴリリスト
+            
+        Returns:
+            最適なカテゴリ
+            
+        Raises:
+            GeminiAPIError: API呼び出しに失敗した場合
+            ImageError: 画像の読み込みや変換に失敗した場合
+        """
+        if not available_categories:
+            self.logger.error("利用可能なカテゴリリストが空です")
+            raise ValueError("利用可能なカテゴリリストが空です")
+        
+        categories_str = ", ".join(available_categories)
+        
+        # プロンプトの作成
+        prompt = f"""
+あなたはヘアスタイルの専門家です。この画像のヘアスタイルに最も適したカテゴリを選んでください。
+
+以下のカテゴリリストから最も適切なものを1つだけ選んでください：
+{categories_str}
+
+必ず以下のJSON形式で出力してください：
+```json
+{{
+  "category": "選択したカテゴリ名（リストにある正確な名前を使用）",
+  "reason": "このカテゴリを選んだ理由"
+}}
+```
+"""
+        
+        # API呼び出し
+        response_text = await self._call_gemini_api(prompt, image_path)
+        
+        # JSONとしてパース
+        json_data = self._parse_json_response(response_text)
+        
+        selected_category = json_data.get("category")
+        reason = json_data.get("reason", "理由なし")
+        
+        self.logger.info(f"カテゴリ選択理由: {reason}")
+        
+        # カテゴリが利用可能なリストに含まれているか確認
+        if selected_category in available_categories:
+            self.logger.info(f"選択されたカテゴリ: {selected_category}")
+            return selected_category
+        
+        # 正確に一致しない場合は、最も近いカテゴリを検索
+        import difflib
+        matches = difflib.get_close_matches(selected_category, available_categories, n=1, cutoff=0.6)
+        if matches:
+            self.logger.info(f"近いカテゴリが見つかりました: '{selected_category}' → '{matches[0]}'")
+            return matches[0]
+        
+        # 一致するものが見つからない場合は最初のカテゴリを返す
+        self.logger.warning(f"一致するカテゴリが見つかりません: '{selected_category}'. 最初のカテゴリを使用します: '{available_categories[0]}'")
+        return available_categories[0]

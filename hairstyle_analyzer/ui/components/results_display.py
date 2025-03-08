@@ -199,14 +199,21 @@ class ResultsDisplayComponent:
                 st.markdown(f"**タイトル:** {template.title}")
                 st.markdown(f"**カテゴリ:** {template.category}")
                 st.markdown(f"**メニュー:** {template.menu}")
+                st.markdown(f"**コメント:** {template.comment}")
                 
-                st.markdown("**コメント:**")
-                st.text_area("", template.comment, height=100, disabled=True)
-                
+                # ハッシュタグを表示
                 st.markdown("**ハッシュタグ:**")
-                hashtags = template.hashtag.split(',')
-                hashtag_html = " ".join([f'<span style="background-color: #f0f0f0; padding: 3px 8px; margin: 3px; border-radius: 10px;">#{tag.strip()}</span>' for tag in hashtags])
-                st.markdown(hashtag_html, unsafe_allow_html=True)
+                hashtags = template.get_hashtags()
+                if hashtags:
+                    hashtag_html = " ".join([f'<span style="background-color: #f0f0f0; padding: 3px 8px; margin: 3px; border-radius: 10px;">#{h}</span>' for h in hashtags])
+                    st.markdown(hashtag_html, unsafe_allow_html=True)
+                else:
+                    st.markdown("なし")
+                
+                # テンプレート選択理由を表示
+                if hasattr(result, 'template_reason') and result.template_reason:
+                    st.markdown("**選択理由:**")
+                    st.markdown(f"<div style='background-color: #f8f9fa; padding: 10px; border-radius: 5px;'>{result.template_reason}</div>", unsafe_allow_html=True)
             
             with col2:
                 st.markdown("##### スタイリスト情報")

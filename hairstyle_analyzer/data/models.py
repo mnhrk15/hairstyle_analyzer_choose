@@ -83,6 +83,7 @@ class ProcessResult(BaseModel):
     selected_coupon: CouponInfo = Field(description="選択されたクーポン")
     stylist_reason: Optional[str] = Field(default=None, description="スタイリスト選択理由")
     coupon_reason: Optional[str] = Field(default=None, description="クーポン選択理由")
+    template_reason: Optional[str] = Field(default=None, description="テンプレート選択理由")
     processed_at: datetime = Field(default_factory=datetime.now, description="処理日時")
 
 
@@ -91,6 +92,16 @@ class CacheEntry(BaseModel):
     data: Any = Field(description="キャッシュデータ")
     timestamp: float = Field(description="作成タイムスタンプ")
     ttl: Optional[float] = Field(default=None, description="有効期限（秒単位）")
+
+
+class TemplateMatchingConfig(BaseModel):
+    """テンプレートマッチング設定を表すモデル"""
+    enabled: bool = Field(default=True, description="AIマッチングを有効にするかどうか")
+    max_templates: int = Field(default=50, description="一度に処理する最大テンプレート数")
+    use_category_filter: bool = Field(default=True, description="カテゴリでフィルタリングするかどうか")
+    fallback_on_failure: bool = Field(default=True, description="失敗時に従来のスコアリングを使用するかどうか")
+    cache_results: bool = Field(default=True, description="結果をキャッシュするかどうか")
+    timeout_seconds: int = Field(default=30, description="APIタイムアウト（秒）")
 
 
 class GeminiConfig(BaseModel):
@@ -106,7 +117,9 @@ class GeminiConfig(BaseModel):
     attribute_prompt_template: str = Field(description="属性分析用プロンプトテンプレート")
     stylist_prompt_template: str = Field(description="スタイリスト選択用プロンプトテンプレート")
     coupon_prompt_template: str = Field(description="クーポン選択用プロンプトテンプレート")
+    template_matching_prompt: str = Field(description="テンプレートマッチング用プロンプトテンプレート")
     length_choices: List[str] = Field(description="髪の長さの選択肢リスト")
+    template_matching: TemplateMatchingConfig = Field(default_factory=TemplateMatchingConfig, description="テンプレートマッチング設定")
 
 
 class ScraperConfig(BaseModel):

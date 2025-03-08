@@ -152,7 +152,35 @@ class MainProcessor(MainProcessorProtocol):
                 return None
             
             # 2. テンプレートマッチング
-            template = self.template_matcher.find_best_template(style_analysis)
+            # AIベースのテンプレートマッチングを試行
+            template = None
+            template_reason = None
+            ai_matching_success = False
+            
+            # Gemini APIサービスを取得
+            gemini_service = self.image_analyzer.gemini_service
+            
+            # 設定からAIマッチングが有効かどうかを確認
+            ai_matching_enabled = gemini_service.config.template_matching.enabled
+            fallback_on_failure = gemini_service.config.template_matching.fallback_on_failure
+            use_category_filter = gemini_service.config.template_matching.use_category_filter
+            max_templates = gemini_service.config.template_matching.max_templates
+            
+            if ai_matching_enabled:
+                self.logger.info("AIベースのテンプレートマッチングを実行します")
+                template, template_reason, ai_matching_success = await self.template_matcher.find_best_template_with_ai(
+                    image_path=image_path,
+                    gemini_service=gemini_service,
+                    analysis=style_analysis,
+                    use_category_filter=use_category_filter,
+                    max_templates=max_templates
+                )
+            
+            # AIマッチングが失敗または無効の場合、従来のスコアリングベースのマッチングを使用
+            if not ai_matching_success and (fallback_on_failure or not ai_matching_enabled):
+                self.logger.info("従来のスコアリングベースのテンプレートマッチングを実行します")
+                template = self.template_matcher.find_best_template(style_analysis)
+                template_reason = "スコアリングベースのマッチングにより選択されました"
             
             if not template:
                 self.logger.error(f"テンプレートマッチングに失敗しました: {image_path.name}")
@@ -258,6 +286,7 @@ class MainProcessor(MainProcessorProtocol):
                     selected_coupon=selected_coupon,
                     stylist_reason=stylist_reason,
                     coupon_reason=coupon_reason,
+                    template_reason=template_reason,
                     processed_at=datetime.now()
                 )
             except Exception as e:
