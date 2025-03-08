@@ -37,6 +37,9 @@ def initialize_logging(config: LoggingConfig, app_name: str = "hairstyle_analyze
     log_level = getattr(logging, config.log_level.upper(), logging.INFO)
     root_logger.setLevel(log_level)
     
+    # Streamlit Cloudかどうかを確認
+    is_streamlit_cloud = os.environ.get("IS_STREAMLIT_CLOUD", "").lower() == "true"
+    
     # ログフォーマッタの作成
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d - %(message)s',
@@ -49,21 +52,31 @@ def initialize_logging(config: LoggingConfig, app_name: str = "hairstyle_analyze
     console_handler.setLevel(log_level)
     root_logger.addHandler(console_handler)
     
-    # ファイルハンドラの追加
-    if config.log_file:
-        log_dir = config.log_file.parent
+    # ファイルハンドラの追加（Streamlit Cloudでの実行時はオプション）
+    if config.log_file and not is_streamlit_cloud:
+        # 環境変数からログディレクトリを取得（設定されていれば）
+        log_file = config.log_file
+        logs_dir = os.environ.get("LOGS_DIR")
+        if logs_dir:
+            log_file = Path(logs_dir) / log_file.name
+        
+        log_dir = log_file.parent
         log_dir.mkdir(parents=True, exist_ok=True)
         
         # ログローテーションを設定
-        file_handler = logging.handlers.RotatingFileHandler(
-            config.log_file,
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(log_level)
-        root_logger.addHandler(file_handler)
+        try:
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,  # 10MB
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(log_level)
+            root_logger.addHandler(file_handler)
+            root_logger.info(f"ログファイルを設定しました: {log_file}")
+        except (IOError, PermissionError) as e:
+            root_logger.warning(f"ログファイルを設定できませんでした: {e}")
     
     # アプリケーション名をログに含める
     class ContextFilter(logging.Filter):
