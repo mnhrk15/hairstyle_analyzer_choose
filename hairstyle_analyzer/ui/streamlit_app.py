@@ -592,19 +592,6 @@ def render_sidebar(config_manager):
             processor.set_use_cache(use_cache)
             st.session_state[SESSION_PROCESSOR] = processor
         
-        # キャッシュクリアボタン
-        if st.button("キャッシュをクリア"):
-            try:
-                # キャッシュマネージャーの初期化
-                cache_manager = CacheManager(config_manager.paths.cache_file, config_manager.cache)
-                
-                # キャッシュクリア
-                cleared_count = cache_manager.clear()
-                
-                st.success(f"キャッシュをクリアしました: {cleared_count}件のエントリが削除されました")
-            except Exception as e:
-                st.error(f"キャッシュのクリア中にエラーが発生しました: {str(e)}")
-
 
 def render_main_content():
     """メインコンテンツの表示"""
