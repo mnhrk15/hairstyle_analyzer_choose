@@ -626,15 +626,18 @@ def render_main_content():
     if uploaded_files:
         st.write(f"{len(uploaded_files)}枚の画像がアップロードされました")
         
-        # 画像プレビューを表示（横に並べる）
-        cols = st.columns(min(3, len(uploaded_files)))
-        for i, uploaded_file in enumerate(uploaded_files[:6]):  # 最大6枚まで表示
-            with cols[i % 3]:
-                st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+        # 画像プレビューを表示（横に並べる）- 列数を4に増やし、画像サイズを制限
+        cols = st.columns(min(4, len(uploaded_files)))
+        for i, uploaded_file in enumerate(uploaded_files[:8]):  # 最大8枚まで表示
+            with cols[i % 4]:
+                # 画像を開いてリサイズ
+                image = Image.open(uploaded_file)
+                # 画像の最大幅を200pxに制限
+                st.image(image, caption=uploaded_file.name, width=200)
         
-        # 6枚以上の場合は省略メッセージを表示
-        if len(uploaded_files) > 6:
-            st.write(f"他 {len(uploaded_files) - 6} 枚の画像は省略されています")
+        # 8枚以上の場合は省略メッセージを表示
+        if len(uploaded_files) > 8:
+            st.write(f"他 {len(uploaded_files) - 8} 枚の画像は省略されています")
         
         # 処理開始ボタン
         if st.button("タイトル生成", type="primary"):

@@ -13,7 +13,8 @@ from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime
 
 import openpyxl
-# スタイル関連のインポートを削除
+# スタイル関連のインポートを追加
+from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
 from ..data.models import ProcessResult, ExcelConfig
@@ -246,9 +247,25 @@ class ExcelExporter(ExcelExporterProtocol):
                 # H列: ハッシュタグ
                 if isinstance(result, dict):
                     template = result.get('selected_template', {})
-                    sheet[f"H{i}"] = template.get('hashtag', '') if isinstance(template, dict) else getattr(template, 'hashtag', '')
+                    hashtag_str = template.get('hashtag', '') if isinstance(template, dict) else getattr(template, 'hashtag', '')
+                    # ハッシュタグを改行して表示し、最初の5個までに制限
+                    hashtags = [tag.strip() for tag in hashtag_str.split(',') if tag.strip()][:5]
+                    sheet[f"H{i}"] = '\n'.join(hashtags)
+                    # セルの書式設定で改行を有効にする
+                    sheet[f"H{i}"].alignment = openpyxl.styles.Alignment(wrap_text=True, vertical='top')
+                    # 行の高さを調整（ハッシュタグの数に応じて）
+                    row_height = min(15 * len(hashtags), 75)  # 1タグあたり15、最大75
+                    sheet.row_dimensions[i].height = max(sheet.row_dimensions[i].height or 15, row_height)
                 else:
-                    sheet[f"H{i}"] = getattr(result.selected_template, 'hashtag', '')
+                    hashtag_str = getattr(result.selected_template, 'hashtag', '')
+                    # ハッシュタグを改行して表示し、最初の5個までに制限
+                    hashtags = [tag.strip() for tag in hashtag_str.split(',') if tag.strip()][:5]
+                    sheet[f"H{i}"] = '\n'.join(hashtags)
+                    # セルの書式設定で改行を有効にする
+                    sheet[f"H{i}"].alignment = openpyxl.styles.Alignment(wrap_text=True, vertical='top')
+                    # 行の高さを調整（ハッシュタグの数に応じて）
+                    row_height = min(15 * len(hashtags), 75)  # 1タグあたり15、最大75
+                    sheet.row_dimensions[i].height = max(sheet.row_dimensions[i].height or 15, row_height)
                 
                 # I列: 画像ファイル名
                 if isinstance(result, dict):
@@ -288,8 +305,26 @@ class ExcelExporter(ExcelExporterProtocol):
             # 最大幅と最小幅を設定
             min_width = 10
             max_width = 50
-            adjusted_width = max(min_width, min(max_width, adjusted_width))
             
+            # ハッシュタグ列（H列）の場合は、最長のハッシュタグの長さに基づいて幅を設定
+            if column_letter == 'H':
+                # ハッシュタグは改行されるので、各行の最長のハッシュタグの長さを考慮
+                max_tag_length = 0
+                for cell in column:
+                    if cell.value:
+                        tags = str(cell.value).split('\n')
+                        for tag in tags:
+                            if len(tag) > max_tag_length:
+                                max_tag_length = len(tag)
+                
+                # ハッシュタグ列の幅を調整
+                adjusted_width = (max_tag_length + 2) * 1.1
+                min_width = 15  # ハッシュタグ列の最小幅を大きめに
+            
+            # 幅を制限
+            adjusted_width = max(min_width, min(adjusted_width, max_width))
+            
+            # 列幅を設定
             sheet.column_dimensions[column_letter].width = adjusted_width
     
     # _apply_styles メソッドを削除
