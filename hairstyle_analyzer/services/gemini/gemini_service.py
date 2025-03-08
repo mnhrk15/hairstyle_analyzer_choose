@@ -19,10 +19,124 @@ import random
 import google.generativeai as genai
 from pydantic import ValidationError
 
-from ...data.models import StyleAnalysis, StyleFeatures, AttributeAnalysis, StylistInfo, CouponInfo, GeminiConfig, Template
+from ...data.models import StyleAnalysis, StyleFeatures, AttributeAnalysis, StylistInfo, CouponInfo, Template, GeminiConfig
 from ...data.interfaces import StyleAnalysisProtocol, AttributeAnalysisProtocol, StylistInfoProtocol, CouponInfoProtocol
-from ...utils.errors import GeminiAPIError, ImageError, APIError, async_with_error_handling
+from ...utils.errors import GeminiAPIError, ValidationError as AppValidationError, async_with_error_handling
 from ...utils.image_utils import encode_image, is_valid_image
+from ...utils.async_context import AsyncResource, asynccontextmanager, Timer
+
+
+class APISession(AsyncResource):
+    """
+    Gemini API呼び出し用の非同期コンテキストマネージャー
+    
+    APIセッションの管理、レート制限の処理、再試行ロジックを含みます。
+    
+    使用例:
+    ```python
+    async with APISession(prompt, image_path, max_retries, retry_delay) as session:
+        response = await session.execute()
+    ```
+    """
+    
+    def __init__(
+        self, 
+        service, 
+        prompt: str, 
+        image_path: Optional[Path] = None, 
+        use_fallback: bool = False,
+        max_retries: int = 3, 
+        retry_delay: float = 1.0
+    ):
+        """初期化
+        
+        Args:
+            service: GeminiServiceのインスタンス
+            prompt: Gemini APIに送信するプロンプト
+            image_path: 画像ファイルのパス（オプション）
+            use_fallback: フォールバックモデルを使用するかどうか
+            max_retries: 最大再試行回数
+            retry_delay: 再試行間の遅延（秒）
+        """
+        self.service = service
+        self.prompt = prompt
+        self.image_path = image_path
+        self.use_fallback = use_fallback
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.attempt = 1
+        self.logger = logging.getLogger(__name__)
+        self.response = None
+    
+    async def initialize(self):
+        """APIセッションの初期化（非同期コンテキストマネージャーの一部）"""
+        self.logger.debug(f"APIセッションを初期化します - 再試行設定: 最大{self.max_retries}回、遅延{self.retry_delay}秒")
+    
+    async def execute(self) -> str:
+        """APIリクエストを実行し、結果を返す"""
+        while self.attempt <= self.max_retries:
+            try:
+                response = await self._execute_api_call()
+                self.response = response
+                return response
+            except Exception as e:
+                # 最後の試行でエラーが発生した場合は例外を発生させる
+                if self.attempt >= self.max_retries:
+                    self.logger.error(f"最大再試行回数（{self.max_retries}回）に達しました: {str(e)}")
+                    raise GeminiAPIError(f"Gemini API呼び出しに失敗しました: {str(e)}")
+                
+                # エラーを記録して再試行
+                self.logger.warning(f"API呼び出しエラー（試行 {self.attempt}/{self.max_retries}）: {str(e)}")
+                self.logger.info(f"{self.retry_delay}秒後に再試行します...")
+                
+                # 遅延を設定して再試行する前に待機
+                await asyncio.sleep(self.retry_delay * self.attempt)
+                self.attempt += 1
+    
+    async def _execute_api_call(self) -> str:
+        """実際のAPI呼び出しを実行する"""
+        try:
+            # 使用するモデルを決定
+            model = self.service.fallback_model if self.use_fallback else self.service.model
+            
+            # 画像がある場合は追加
+            if self.image_path:
+                # 画像データを準備
+                image_data = self.service._prepare_image(self.image_path)
+                # Gemini APIはプロンプトと画像を組み合わせたコンテンツを受け取る
+                content = [self.prompt, image_data]
+            else:
+                # 画像なしの場合はテキストのみ
+                content = [self.prompt]
+            
+            # 現在の試行回数を考慮した温度を設定
+            # 再試行時には温度を少し上げると多様な出力になる可能性がある
+            temperature = min(0.2 * self.attempt, 0.8)
+            
+            self.logger.debug(f"API呼び出し実行 (試行 {self.attempt}, 温度: {temperature})")
+            
+            # Google API呼び出し - 正しいパラメータ名を使用
+            response = await asyncio.to_thread(
+                model.generate_content,
+                content,  # contentパラメータではなく直接コンテンツを渡す
+                generation_config={
+                    "temperature": temperature,
+                    "max_output_tokens": 2048,
+                }
+            )
+            
+            return response.text
+            
+        except Exception as e:
+            self.logger.error(f"API呼び出し実行中にエラーが発生: {str(e)}")
+            raise
+    
+    async def cleanup(self):
+        """APIセッションのクリーンアップ（非同期コンテキストマネージャーの一部）"""
+        if self.response:
+            self.logger.debug(f"APIセッションを正常に完了しました（{self.attempt}回の試行）")
+        else:
+            self.logger.debug("APIセッションは応答なしで終了しました")
 
 
 class GeminiService:
@@ -140,6 +254,47 @@ class GeminiService:
             # テストケースの期待に合わせて、元のテンプレートをそのまま返す
             return template
     
+    @asynccontextmanager
+    async def api_session(
+        self, 
+        prompt: str, 
+        image_path: Optional[Path] = None, 
+        use_fallback: bool = False
+    ) -> AsyncResource:
+        """
+        Gemini API呼び出し用の非同期コンテキストマネージャー
+        
+        コンテキスト内でAPIセッションを管理し、自動的にクリーンアップします。
+        
+        使用例:
+        ```python
+        async with service.api_session(prompt, image_path) as session:
+            response = await session.execute()
+        ```
+        
+        Args:
+            prompt: Gemini APIに送信するプロンプト
+            image_path: 画像ファイルのパス（オプション）
+            use_fallback: フォールバックモデルを使用するかどうか
+            
+        Yields:
+            APISessionオブジェクト
+        """
+        session = APISession(
+            self, 
+            prompt, 
+            image_path, 
+            use_fallback, 
+            self.config.max_retries, 
+            self.config.retry_delay
+        )
+        
+        await session.initialize()
+        try:
+            yield session
+        finally:
+            await session.cleanup()
+    
     async def _call_gemini_api(self, 
                               prompt: str, 
                               image_path: Optional[Path] = None, 
@@ -161,96 +316,13 @@ class GeminiService:
             GeminiAPIError: API呼び出しに失敗した場合
         """
         try:
-            return await self._execute_api_call(prompt, image_path, use_fallback)
-            
+            async with self.api_session(prompt, image_path, use_fallback) as session:
+                response = await session.execute()
+                return response
         except Exception as e:
-            return await self._handle_api_error(e, prompt, image_path, use_fallback, attempt)
+            self.logger.error(f"Gemini API呼び出しに失敗しました: {str(e)}")
+            raise GeminiAPIError(f"Gemini API呼び出しに失敗しました: {str(e)}")
 
-    async def _execute_api_call(self, prompt: str, image_path: Optional[Path] = None, use_fallback: bool = False) -> str:
-        """
-        実際のGemini API呼び出しを実行します。
-        
-        Args:
-            prompt: プロンプト
-            image_path: 画像ファイルのパス（オプション）
-            use_fallback: フォールバックモデルを使用するかどうか
-            
-        Returns:
-            APIレスポンステキスト
-        """
-        # 使用するモデルを選択
-        model = self.fallback_model if use_fallback else self.model
-        
-        # コンテンツのリスト
-        content = [prompt]
-        
-        # 画像がある場合は追加
-        if image_path:
-            image_parts = self._prepare_image(image_path)
-            content.append(image_parts)
-        
-        # 生成設定
-        generation_config = {
-            "max_output_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-            "response_mime_type": "application/json"
-        }
-        
-        # API呼び出しをasyncioで実行
-        # Gemini APIは直接asyncをサポートしていないため、スレッドプールで実行
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: model.generate_content(
-                content,
-                generation_config=generation_config
-            )
-        )
-        
-        # レスポンスのテキストを取得
-        return response.text
-
-    async def _handle_api_error(self, 
-                               exception: Exception, 
-                               prompt: str, 
-                               image_path: Optional[Path], 
-                               use_fallback: bool, 
-                               attempt: int) -> str:
-        """
-        API呼び出しエラーを処理します。
-        
-        Args:
-            exception: 発生した例外
-            prompt: プロンプト
-            image_path: 画像ファイルのパス
-            use_fallback: フォールバックモデルを使用するかどうか
-            attempt: 現在の試行回数
-            
-        Returns:
-            リトライ後のAPIレスポンス
-            
-        Raises:
-            GeminiAPIError: すべてのリトライとフォールバックが失敗した場合
-        """
-        error_msg = f"Gemini API呼び出しエラー (試行 {attempt}/{self.config.max_retries}): {str(exception)}"
-        self.logger.error(error_msg)
-        
-        if attempt >= self.config.max_retries:
-            if not use_fallback:
-                # フォールバックモデルがまだ試されていない場合
-                self.logger.info(f"プライマリモデル({self.config.model})の呼び出しに失敗、フォールバックモデル({self.config.fallback_model})を試行します")
-                return await self._call_gemini_api(prompt, image_path, use_fallback=True, attempt=1)
-            else:
-                # すべてのリトライとフォールバックが失敗した場合
-                raise GeminiAPIError(
-                    f"すべての試行とフォールバックが失敗しました: {str(exception)}",
-                    error_type="API_CALL_FAILED"
-                ) from exception
-        
-        # 遅延を入れてリトライ
-        await asyncio.sleep(self.config.retry_delay * attempt)
-        return await self._call_gemini_api(prompt, image_path, use_fallback, attempt + 1)
-    
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
         APIレスポンスからJSONデータを抽出・パースします。

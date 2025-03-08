@@ -27,6 +27,7 @@ from ..utils.errors import (
 )
 from ..utils.system_utils import calculate_optimal_batch_size
 from ..utils.cache_decorators import cacheable
+from ..utils.async_context import progress_tracker
 from .image_analyzer import ImageAnalyzer
 from .template_matcher import TemplateMatcher
 from .style_matching import StyleMatchingService
@@ -94,15 +95,18 @@ class MainProcessor(MainProcessorProtocol):
     def set_progress_callback(self, callback) -> None:
         """
         進捗コールバックを設定します。
+        非推奨: 代わりに非同期コンテキストマネージャーを使用してください。
         
         Args:
             callback: 進捗状況を通知するコールバック関数
         """
+        self.logger.warning("set_progress_callbackは非推奨です。代わりに非同期コンテキストマネージャーを使用してください。")
         self.progress_callback = callback
     
     def _update_progress(self, current: int, total: int, message: str = "") -> None:
         """
         進捗状況を更新します。
+        非推奨: 代わりに非同期コンテキストマネージャーを使用してください。
         
         Args:
             current: 現在の進捗
@@ -319,6 +323,7 @@ class MainProcessor(MainProcessorProtocol):
         
         Args:
             image_paths: 画像ファイルのパスリスト
+            use_cache: キャッシュを使用するかどうか（Noneの場合はインスタンスの設定を使用）
             
         Returns:
             処理結果のリスト
@@ -345,47 +350,44 @@ class MainProcessor(MainProcessorProtocol):
         batch_count = (total_images + optimal_batch_size - 1) // optimal_batch_size
         batches = [image_paths[i:i + optimal_batch_size] for i in range(0, total_images, optimal_batch_size)]
         
-        # 進捗更新
-        self._update_progress(0, total_images, "処理準備完了")
+        # キャッシュを使用するかどうかの判定
+        should_use_cache = self.use_cache if use_cache is None else use_cache
+        
+        # 非同期コンテキストマネージャーを使用して進捗を追跡
+        async def progress_handler(current, total, message):
+            # このメソッドは、後方互換性のために進捗コールバックを呼び出します
+            self._update_progress(current, total, message)
         
         processed_count = 0
         
-        # バッチごとに処理
-        for batch_index, batch in enumerate(batches):
-            batch_message = f"バッチ {batch_index + 1}/{batch_count} 処理中"
-            self.logger.info(batch_message)
-            self._update_progress(processed_count, total_images, batch_message)
-            
-            # キャッシュを使用するかどうかの判定
-            should_use_cache = self.use_cache if use_cache is None else use_cache
-            
-            # バッチ内の画像を並列処理
-            tasks = [self.process_single_image(image_path, use_cache=should_use_cache) for image_path in batch]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 結果の処理
-            for i, result in enumerate(batch_results):
-                if isinstance(result, Exception):
-                    # エラーをログに記録
-                    self.logger.error(f"画像処理中にエラーが発生しました: {str(result)}")
-                    # エラーが発生した画像のパスを取得
-                    error_image = batch[i].name if i < len(batch) else "不明"
-                    self._update_progress(processed_count + i + 1, total_images, f"エラー: {error_image}")
-                elif result:
-                    # 正常な結果を追加
-                    self.results.append(result)
+        # 進捗トラッカーを使用して処理を実行
+        async with progress_tracker(total_images, progress_handler) as tracker:
+            # バッチごとに処理
+            for batch_index, batch in enumerate(batches):
+                batch_message = f"バッチ {batch_index + 1}/{batch_count} 処理中"
+                self.logger.info(batch_message)
+                tracker.update(processed_count, batch_message)
                 
-                processed_count += 1
-                self._update_progress(processed_count, total_images)
-            
-            # APIレート制限に対応するための遅延
-            if batch_index < len(batches) - 1:
-                await asyncio.sleep(self.api_delay)
+                # バッチ内の画像を並列処理
+                tasks = [self.process_single_image(image_path, use_cache=should_use_cache) for image_path in batch]
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 結果の処理
+                for i, result in enumerate(batch_results):
+                    if isinstance(result, Exception):
+                        # エラーをログに記録
+                        self.logger.error(f"画像処理中にエラーが発生しました: {str(result)}")
+                        # エラーが発生した画像のパスを取得
+                        error_image = batch[i].name if i < len(batch) else "不明"
+                        tracker.update(processed_count + i + 1, f"エラー: {error_image}")
+                    elif result:
+                        # 正常な結果を追加
+                        self.results.append(result)
+                    
+                    processed_count += 1
+                    tracker.update(processed_count)
         
-        # 最終進捗更新
-        self._update_progress(total_images, total_images, f"処理完了: {len(self.results)}/{total_images}枚")
-        
-        self.logger.info(f"複数画像処理完了: {len(self.results)}/{total_images}枚")
+        # 結果を返す
         return self.results
     
     async def process_images_with_external_data(
@@ -436,152 +438,159 @@ class MainProcessor(MainProcessorProtocol):
         batch_count = (total_images + optimal_batch_size - 1) // optimal_batch_size
         batches = [image_paths[i:i + optimal_batch_size] for i in range(0, total_images, optimal_batch_size)]
         
-        # 進捗更新
-        self._update_progress(0, total_images, "処理準備完了")
+        # キャッシュを使用するかどうかの判定
+        should_use_cache = self.use_cache if use_cache is None else use_cache
+        
+        # 非同期コンテキストマネージャーを使用して進捗を追跡
+        async def progress_handler(current, total, message):
+            # このメソッドは、後方互換性のために進捗コールバックを呼び出します
+            self._update_progress(current, total, message)
         
         processed_count = 0
         
-        # バッチごとに処理
-        for batch_index, batch in enumerate(batches):
-            batch_message = f"バッチ {batch_index + 1}/{batch_count} 処理中"
-            self.logger.info(batch_message)
-            self._update_progress(processed_count, total_images, batch_message)
-            
-            # バッチ内の各画像を順次処理
-            for image_path in batch:
-                try:
-                    # キャッシュを使用するかどうかの判定
-                    should_use_cache = self.use_cache if use_cache is None else use_cache
-                    
-                    # キャッシュチェック（キャッシュを使用する場合のみ）
-                    if should_use_cache and self.cache_manager:
-                        cache_key = f"process_result_ext:{image_path.name}"
-                        cached_result = self.cache_manager.get(cache_key)
-                        if cached_result:
-                            self.logger.info(f"キャッシュから処理結果を取得: {image_path.name}")
-                            self.results.append(cached_result)
-                            processed_count += 1
-                            self._update_progress(processed_count, total_images, f"キャッシュ: {image_path.name}")
-                            continue
-                    
-                    # 1. スタイル分析と属性分析を並列実行
-                    categories = self.template_matcher.template_manager.get_all_categories()
-                    style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories, use_cache=should_use_cache)
-                    
-                    if not style_analysis or not attribute_analysis:
-                        self.logger.error(f"画像分析に失敗しました: {image_path.name}")
-                        processed_count += 1
-                        self._update_progress(processed_count, total_images, f"分析失敗: {image_path.name}")
-                        continue
-                    
-                    # 2. テンプレートマッチング
-                    template = self.template_matcher.find_best_template(style_analysis)
-                    
-                    if not template:
-                        self.logger.error(f"テンプレートマッチングに失敗しました: {image_path.name}")
-                        processed_count += 1
-                        self._update_progress(processed_count, total_images, f"マッチング失敗: {image_path.name}")
-                        continue
-                    
-                    # 3. スタイリスト選択
-                    stylist_result = await self.style_matcher.select_stylist(
-                        image_path, stylists, style_analysis
-                    )
-                    selected_stylist, stylist_reason = stylist_result
-                    
-                    # 4. クーポン選択
-                    coupon_result = await self.style_matcher.select_coupon(
-                        image_path, coupons, style_analysis
-                    )
-                    selected_coupon, coupon_reason = coupon_result
-                    
-                    # 5. 処理結果の作成
+        # 進捗トラッカーを使用して処理を実行
+        async with progress_tracker(total_images, progress_handler) as tracker:
+            # バッチごとに処理
+            for batch_index, batch in enumerate(batches):
+                batch_message = f"バッチ {batch_index + 1}/{batch_count} 処理中"
+                self.logger.info(batch_message)
+                tracker.update(processed_count, batch_message)
+                
+                # バッチ内の各画像を順次処理
+                for image_path in batch:
                     try:
-                        # スタイル分析が辞書型の場合はStyleAnalysisに変換
-                        if isinstance(style_analysis, dict):
-                            from ..data.models import StyleAnalysis, StyleFeatures
-                            features = StyleFeatures(**style_analysis.get('features', {}))
-                            style_analysis = StyleAnalysis(
-                                category=style_analysis.get('category', ''),
-                                features=features,
-                                keywords=style_analysis.get('keywords', [])
-                            )
+                        # キャッシュを使用するかどうかの判定
+                        should_use_cache = self.use_cache if use_cache is None else use_cache
                         
-                        # 属性分析が辞書型の場合はAttributeAnalysisに変換
-                        if isinstance(attribute_analysis, dict):
-                            from ..data.models import AttributeAnalysis
-                            attribute_analysis = AttributeAnalysis(
-                                sex=attribute_analysis.get('sex', ''),
-                                length=attribute_analysis.get('length', '')
-                            )
+                        # キャッシュチェック（キャッシュを使用する場合のみ）
+                        if should_use_cache and self.cache_manager:
+                            cache_key = f"process_result_ext:{image_path.name}"
+                            cached_result = self.cache_manager.get(cache_key)
+                            if cached_result:
+                                self.logger.info(f"キャッシュから処理結果を取得: {image_path.name}")
+                                self.results.append(cached_result)
+                                processed_count += 1
+                                tracker.update(processed_count, f"キャッシュ: {image_path.name}")
+                                continue
                         
-                        # スタイリストが辞書型の場合はStylistInfoに変換
-                        if isinstance(selected_stylist, dict):
-                            from ..data.models import StylistInfo
-                            selected_stylist = StylistInfo(
-                                name=selected_stylist.get('name', 'サンプルスタイリスト'),
-                                specialties=selected_stylist.get('specialties', ''),
-                                description=selected_stylist.get('description', '')
-                            )
+                        # 1. スタイル分析と属性分析を並列実行
+                        categories = self.template_matcher.template_manager.get_all_categories()
+                        style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories, use_cache=should_use_cache)
                         
-                        # クーポンが辞書型の場合はCouponInfoに変換
-                        if isinstance(selected_coupon, dict):
-                            from ..data.models import CouponInfo
-                            selected_coupon = CouponInfo(
-                                name=selected_coupon.get('name', 'サンプルクーポン'),
-                                price=selected_coupon.get('price', 0),
-                                description=selected_coupon.get('description', ''),
-                                categories=selected_coupon.get('categories', []),
-                                conditions=selected_coupon.get('conditions', {})
-                            )
+                        if not style_analysis or not attribute_analysis:
+                            self.logger.error(f"画像分析に失敗しました: {image_path.name}")
+                            processed_count += 1
+                            tracker.update(processed_count, f"分析失敗: {image_path.name}")
+                            continue
                         
-                        # テンプレートが辞書型の場合はTemplateに変換
-                        if isinstance(template, dict):
-                            from ..data.models import Template
-                            template = Template(
-                                category=template.get('category', ''),
-                                title=template.get('title', ''),
-                                menu=template.get('menu', ''),
-                                comment=template.get('comment', ''),
-                                hashtag=template.get('hashtag', '')
-                            )
+                        # 2. テンプレートマッチング
+                        template = self.template_matcher.find_best_template(style_analysis)
                         
-                        result = ProcessResult(
-                            image_name=image_path.name,
-                            style_analysis=style_analysis,
-                            attribute_analysis=attribute_analysis,
-                            selected_template=template,
-                            selected_stylist=selected_stylist,
-                            selected_coupon=selected_coupon,
-                            processed_at=datetime.now()
+                        if not template:
+                            self.logger.error(f"テンプレートマッチングに失敗しました: {image_path.name}")
+                            processed_count += 1
+                            tracker.update(processed_count, f"マッチング失敗: {image_path.name}")
+                            continue
+                        
+                        # 3. スタイリスト選択
+                        stylist_result = await self.style_matcher.select_stylist(
+                            image_path, stylists, style_analysis
                         )
+                        selected_stylist, stylist_reason = stylist_result
+                        
+                        # 4. クーポン選択
+                        coupon_result = await self.style_matcher.select_coupon(
+                            image_path, coupons, style_analysis
+                        )
+                        selected_coupon, coupon_reason = coupon_result
+                        
+                        # 5. 処理結果の作成
+                        try:
+                            # スタイル分析が辞書型の場合はStyleAnalysisに変換
+                            if isinstance(style_analysis, dict):
+                                from ..data.models import StyleAnalysis, StyleFeatures
+                                features = StyleFeatures(**style_analysis.get('features', {}))
+                                style_analysis = StyleAnalysis(
+                                    category=style_analysis.get('category', ''),
+                                    features=features,
+                                    keywords=style_analysis.get('keywords', [])
+                                )
+                            
+                            # 属性分析が辞書型の場合はAttributeAnalysisに変換
+                            if isinstance(attribute_analysis, dict):
+                                from ..data.models import AttributeAnalysis
+                                attribute_analysis = AttributeAnalysis(
+                                    sex=attribute_analysis.get('sex', ''),
+                                    length=attribute_analysis.get('length', '')
+                                )
+                            
+                            # スタイリストが辞書型の場合はStylistInfoに変換
+                            if isinstance(selected_stylist, dict):
+                                from ..data.models import StylistInfo
+                                selected_stylist = StylistInfo(
+                                    name=selected_stylist.get('name', 'サンプルスタイリスト'),
+                                    specialties=selected_stylist.get('specialties', ''),
+                                    description=selected_stylist.get('description', '')
+                                )
+                            
+                            # クーポンが辞書型の場合はCouponInfoに変換
+                            if isinstance(selected_coupon, dict):
+                                from ..data.models import CouponInfo
+                                selected_coupon = CouponInfo(
+                                    name=selected_coupon.get('name', 'サンプルクーポン'),
+                                    price=selected_coupon.get('price', 0),
+                                    description=selected_coupon.get('description', ''),
+                                    categories=selected_coupon.get('categories', []),
+                                    conditions=selected_coupon.get('conditions', {})
+                                )
+                            
+                            # テンプレートが辞書型の場合はTemplateに変換
+                            if isinstance(template, dict):
+                                from ..data.models import Template
+                                template = Template(
+                                    category=template.get('category', ''),
+                                    title=template.get('title', ''),
+                                    menu=template.get('menu', ''),
+                                    comment=template.get('comment', ''),
+                                    hashtag=template.get('hashtag', '')
+                                )
+                            
+                            result = ProcessResult(
+                                image_name=image_path.name,
+                                style_analysis=style_analysis,
+                                attribute_analysis=attribute_analysis,
+                                selected_template=template,
+                                selected_stylist=selected_stylist,
+                                selected_coupon=selected_coupon,
+                                processed_at=datetime.now()
+                            )
+                        except Exception as e:
+                            self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
+                        
+                        # 結果をキャッシュに保存
+                        if self.cache_manager:
+                            self.cache_manager.set(cache_key, result)
+                        
+                        # 結果を追加
+                        self.results.append(result)
+                        self.logger.info(f"画像処理完了: {image_path.name}")
+                        
                     except Exception as e:
-                        self.logger.error(f"処理結果の作成に失敗しました: {str(e)}")
+                        self.logger.error(f"画像 {image_path.name} の処理中にエラーが発生しました: {str(e)}")
                     
-                    # 結果をキャッシュに保存
-                    if self.cache_manager:
-                        self.cache_manager.set(cache_key, result)
+                    # 進捗更新
+                    processed_count += 1
+                    tracker.update(processed_count, f"処理: {image_path.name}")
                     
-                    # 結果を追加
-                    self.results.append(result)
-                    self.logger.info(f"画像処理完了: {image_path.name}")
-                    
-                except Exception as e:
-                    self.logger.error(f"画像 {image_path.name} の処理中にエラーが発生しました: {str(e)}")
+                    # APIレート制限に対応するための遅延
+                    await asyncio.sleep(self.api_delay)
                 
-                # 進捗更新
-                processed_count += 1
-                self._update_progress(processed_count, total_images, f"処理: {image_path.name}")
-                
-                # APIレート制限に対応するための遅延
-                await asyncio.sleep(self.api_delay)
-            
-            # バッチ間の遅延
-            if batch_index < len(batches) - 1:
-                await asyncio.sleep(self.api_delay * 2)
+                # バッチ間の遅延
+                if batch_index < len(batches) - 1:
+                    await asyncio.sleep(self.api_delay * 2)
         
         # 最終進捗更新
-        self._update_progress(total_images, total_images, f"処理完了: {len(self.results)}/{total_images}枚")
+        tracker.update(total_images, total_images, f"処理完了: {len(self.results)}/{total_images}枚")
         
         self.logger.info(f"外部データを使用した複数画像処理完了: {len(self.results)}/{total_images}枚")
         return self.results

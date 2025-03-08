@@ -30,6 +30,7 @@ from hairstyle_analyzer.core.excel_exporter import ExcelExporter
 from hairstyle_analyzer.core.processor import MainProcessor
 from hairstyle_analyzer.utils.errors import AppError
 from hairstyle_analyzer.ui.components.error_display import display_error, StreamlitErrorHandler
+from hairstyle_analyzer.utils.async_context import progress_tracker
 
 
 # セッションステート用キー
@@ -81,15 +82,16 @@ def update_progress(current, total, message=""):
         st.session_state[SESSION_PROGRESS] = progress
 
 
-async def process_images(processor, image_paths, stylists=None, coupons=None, progress_callback=None, use_cache=None):
+async def process_images(processor, image_paths, stylists=None, coupons=None, use_cache=None):
     """画像処理を実行する関数
+    
+    非同期コンテキストマネージャーを使用して進捗状況を追跡します。
     
     Args:
         processor: メインプロセッサー
         image_paths: 画像ファイルのパスリスト
         stylists: スタイリスト情報のリスト（オプション）
         coupons: クーポン情報のリスト（オプション）
-        progress_callback: 進捗コールバック関数（オプション）
         use_cache: キャッシュを使用するかどうか（Noneの場合はプロセッサーの設定を使用）
     
     Returns:
@@ -98,23 +100,26 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, pr
     results = []
     total = len(image_paths)
     
-    for i, image_path in enumerate(image_paths):
-        try:
-            # 1画像の処理（スタイリストとクーポンのデータを渡す）
-            if stylists and coupons:
-                result = await processor.process_single_image(image_path, stylists, coupons, use_cache=use_cache)
-            else:
-                result = await processor.process_single_image(image_path, use_cache=use_cache)
-            
-            results.append(result)
-            
-            # 進捗更新
-            if progress_callback:
-                progress_callback(i + 1, total)
+    # 進捗追跡用の非同期コンテキストマネージャーを使用
+    async with progress_tracker(total, update_progress) as tracker:
+        for i, image_path in enumerate(image_paths):
+            try:
+                # 1画像の処理（スタイリストとクーポンのデータを渡す）
+                if stylists and coupons:
+                    result = await processor.process_single_image(image_path, stylists, coupons, use_cache=use_cache)
+                else:
+                    result = await processor.process_single_image(image_path, use_cache=use_cache)
                 
-        except Exception as e:
-            logging.error(f"画像処理エラー ({image_path.name}): {str(e)}")
-            # エラーを含む結果オブジェクトを追加することも可能
+                if result:
+                    results.append(result)
+                
+                # 進捗更新
+                tracker.update(i + 1, f"画像処理中: {image_path.name}")
+                    
+            except Exception as e:
+                logging.error(f"画像処理エラー ({image_path.name}): {str(e)}")
+                # エラー情報を進捗メッセージに含める
+                tracker.update(i + 1, f"エラー: {image_path.name} - {str(e)}")
     
     return results
 
@@ -692,7 +697,7 @@ def render_main_content():
                     use_cache = st.session_state.get(SESSION_USE_CACHE, False)
                     
                     # 処理の実行（スタイリストとクーポンのデータとキャッシュ設定を渡す）
-                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, update_progress, use_cache=use_cache))
+                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, use_cache))
                     
                     # 処理完了
                     progress_bar.progress(1.0)
