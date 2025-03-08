@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import types
 
 from hairstyle_analyzer.services.gemini.gemini_service import GeminiService
-from hairstyle_analyzer.data.models import GeminiConfig, StyleAnalysis, AttributeAnalysis, StyleFeatures, StylistInfo, CouponInfo
+from hairstyle_analyzer.data.models import GeminiConfig, StyleAnalysis, AttributeAnalysis, StyleFeatures, StylistInfo, CouponInfo, Template, TemplateMatchingConfig
 from hairstyle_analyzer.utils.errors import GeminiAPIError, ImageError
 
 
@@ -59,6 +59,7 @@ class TestGeminiService(AsyncioTestCase):
             attribute_prompt_template="テスト{length_choices}",
             stylist_prompt_template="テスト{stylists}{category}{color}{cut_technique}{styling}{impression}",
             coupon_prompt_template="テスト{coupons}{category}{color}{cut_technique}{styling}{impression}",
+            template_matching_prompt="テスト{analysis_info}{templates}",
             length_choices=["ショート", "ミディアム", "ロング"]
         )
         
@@ -465,6 +466,138 @@ class TestGeminiService(AsyncioTestCase):
                 # 結果を確認
                 self.assertEqual(result.name, "テストクーポン1")
                 self.assertEqual(result.price, "1000円")
+    
+    def test_select_best_template(self):
+        """select_best_templateメソッドのテスト"""
+        # テスト用のテンプレートを作成
+        templates = [
+            Template(
+                category="ボブ",
+                title="透明感ボブ",
+                menu="カット+カラー",
+                comment="透明感のあるボブスタイル",
+                hashtag="ボブ,透明感,ナチュラル"
+            ),
+            Template(
+                category="ショート",
+                title="ナチュラルショート",
+                menu="カット",
+                comment="ナチュラルなショートスタイル",
+                hashtag="ショート,ナチュラル,簡単スタイリング"
+            )
+        ]
+        
+        # 分析結果を作成
+        analysis = StyleAnalysis(
+            category="ボブ",
+            features=StyleFeatures(
+                color="アッシュブラウン",
+                cut_technique="ワンレングスボブ",
+                styling="ナチュラル",
+                impression="透明感"
+            ),
+            keywords=["ボブ", "ナチュラル", "透明感"]
+        )
+        
+        # APIレスポンスをモック
+        mock_response = json.dumps({
+            "template_id": 0,
+            "reason": "このテンプレートは透明感のあるボブスタイルで、画像の特徴と一致しています。"
+        })
+        
+        # _call_gemini_apiメソッドをモック
+        with patch.object(self.service, '_call_gemini_api', new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = mock_response
+            
+            # テスト対象メソッドを実行
+            result = self.run_async(self.service.select_best_template(
+                image_path=Path("dummy.jpg"),
+                templates=templates,
+                analysis=analysis
+            ))
+            
+            # 結果を検証
+            self.assertIsNotNone(result)
+            template_id, reason = result
+            self.assertEqual(template_id, 0)
+            self.assertEqual(reason, "このテンプレートは透明感のあるボブスタイルで、画像の特徴と一致しています。")
+            
+            # APIが正しく呼び出されたことを確認
+            mock_call_api.assert_called_once()
+            
+            # プロンプトに必要な情報が含まれていることを確認
+            prompt = mock_call_api.call_args[0][0]
+            self.assertIn("透明感ボブ", prompt)
+            self.assertIn("ナチュラルショート", prompt)
+            self.assertIn("ボブ", prompt)
+    
+    def test_select_best_template_invalid_response(self):
+        """select_best_templateメソッドの無効なレスポンスのテスト"""
+        # テスト用のテンプレートを作成
+        templates = [
+            Template(
+                category="ボブ",
+                title="透明感ボブ",
+                menu="カット+カラー",
+                comment="透明感のあるボブスタイル",
+                hashtag="ボブ,透明感,ナチュラル"
+            )
+        ]
+        
+        # 無効なAPIレスポンスをモック
+        mock_response = "無効なJSON"
+        
+        # _call_gemini_apiメソッドをモック
+        with patch.object(self.service, '_call_gemini_api', new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = mock_response
+            
+            # テスト対象メソッドを実行
+            result = self.run_async(self.service.select_best_template(
+                image_path=Path("dummy.jpg"),
+                templates=templates
+            ))
+            
+            # 結果を検証
+            self.assertIsNotNone(result)
+            template_id, reason = result
+            self.assertIsNone(template_id)
+            self.assertIn("無効", reason)
+    
+    def test_select_best_template_empty_templates(self):
+        """select_best_templateメソッドの空テンプレートリストのテスト"""
+        # 空のテンプレートリスト
+        templates = []
+        
+        # テスト対象メソッドを実行し、例外が発生することを確認
+        with self.assertRaises(ValueError):
+            self.run_async(self.service.select_best_template(
+                image_path=Path("dummy.jpg"),
+                templates=templates
+            ))
+    
+    def test_format_templates_for_matching(self):
+        """_format_templates_for_matchingメソッドのテスト"""
+        # テスト用のテンプレートを作成
+        templates = [
+            Template(
+                category="ボブ",
+                title="透明感ボブ",
+                menu="カット+カラー",
+                comment="透明感のあるボブスタイル",
+                hashtag="ボブ,透明感,ナチュラル"
+            )
+        ]
+        
+        # テスト対象メソッドを実行
+        result = self.service._format_templates_for_matching(templates)
+        
+        # 結果を検証
+        self.assertIn("テンプレート 0:", result)
+        self.assertIn("カテゴリ: ボブ", result)
+        self.assertIn("タイトル: 透明感ボブ", result)
+        self.assertIn("メニュー: カット+カラー", result)
+        self.assertIn("コメント: 透明感のあるボブスタイル", result)
+        self.assertIn("ハッシュタグ: ボブ,透明感,ナチュラル", result)
 
 
 if __name__ == '__main__':

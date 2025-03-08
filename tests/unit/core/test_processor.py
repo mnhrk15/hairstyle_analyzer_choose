@@ -63,6 +63,9 @@ def mock_template_matcher():
     
     mock_matcher.find_best_template = MagicMock(return_value=template)
     
+    # find_best_template_with_ai のモック
+    mock_matcher.find_best_template_with_ai = AsyncMock(return_value=(template, "AIによる選択理由", True))
+    
     # template_manager のモック
     mock_matcher.template_manager = MagicMock()
     mock_matcher.template_manager.get_all_categories = MagicMock(return_value=["テストカテゴリ1", "テストカテゴリ2"])
@@ -78,19 +81,22 @@ def mock_style_matcher():
     # select_stylist のモック
     stylist = StylistInfo(
         name="テストスタイリスト",
-        description="テスト説明",
-        position="テスト役職"
+        specialties="テスト得意技術",
+        description="テスト説明"
     )
     
-    mock_service.select_stylist = AsyncMock(return_value=stylist)
+    mock_service.select_stylist = AsyncMock(return_value=(stylist, "テスト選択理由"))
     
     # select_coupon のモック
     coupon = CouponInfo(
         name="テストクーポン",
-        price="1000円"
+        price=1000,
+        description="テスト説明",
+        categories=["テストカテゴリ"],
+        conditions={}
     )
     
-    mock_service.select_coupon = AsyncMock(return_value=coupon)
+    mock_service.select_coupon = AsyncMock(return_value=(coupon, "テスト選択理由"))
     
     return mock_service
 
@@ -119,6 +125,31 @@ def mock_cache_manager():
 
 
 @pytest.fixture
+def mock_gemini_service():
+    """GeminiServiceのモック"""
+    mock_service = MagicMock()
+    
+    # configのモック
+    mock_config = MagicMock()
+    mock_config.template_matching = MagicMock()
+    mock_config.template_matching.enabled = True
+    mock_config.template_matching.fallback_on_failure = True
+    mock_config.template_matching.use_category_filter = True
+    mock_config.template_matching.max_templates = 50
+    
+    mock_service.config = mock_config
+    
+    return mock_service
+
+
+@pytest.fixture
+def mock_image_analyzer_with_gemini(mock_image_analyzer, mock_gemini_service):
+    """GeminiServiceを持つImageAnalyzerのモック"""
+    mock_image_analyzer.gemini_service = mock_gemini_service
+    return mock_image_analyzer
+
+
+@pytest.fixture
 def processor(
     mock_image_analyzer, 
     mock_template_matcher, 
@@ -135,6 +166,26 @@ def processor(
         cache_manager=mock_cache_manager,
         batch_size=2,
         api_delay=0.1
+    )
+
+
+@pytest.fixture
+def processor_with_gemini(
+    mock_image_analyzer_with_gemini, 
+    mock_template_matcher, 
+    mock_style_matcher, 
+    mock_excel_exporter, 
+    mock_cache_manager
+):
+    """GeminiServiceを持つMainProcessorのインスタンス"""
+    return MainProcessor(
+        image_analyzer=mock_image_analyzer_with_gemini,
+        template_matcher=mock_template_matcher,
+        style_matcher=mock_style_matcher,
+        excel_exporter=mock_excel_exporter,
+        cache_manager=mock_cache_manager,
+        batch_size=2,
+        use_cache=False
     )
 
 
@@ -380,3 +431,50 @@ def test_clear_results(processor):
     
     # 結果がクリアされたことを確認
     assert processor.results == []
+
+
+@pytest.mark.asyncio
+async def test_process_single_image_with_ai(processor_with_gemini, mock_template_matcher):
+    """AIベースのテンプレートマッチングを使用したprocess_single_imageメソッドのテスト"""
+    # テスト用の画像パス
+    image_path = Path("test.jpg")
+    
+    # 処理を実行
+    result = await processor_with_gemini.process_single_image(image_path)
+    
+    # AIベースのテンプレートマッチングが呼ばれたことを確認
+    mock_template_matcher.find_best_template_with_ai.assert_called_once()
+    
+    # 従来のテンプレートマッチングが呼ばれていないことを確認
+    mock_template_matcher.find_best_template.assert_not_called()
+    
+    # 結果が正しいことを確認
+    assert result is not None
+    assert result.image_name == "test.jpg"
+    assert result.selected_template.title == "テストタイトル"
+    assert result.template_reason == "AIによる選択理由"
+
+
+@pytest.mark.asyncio
+async def test_process_single_image_ai_fallback(processor_with_gemini, mock_template_matcher):
+    """AIベースのテンプレートマッチングが失敗した場合のフォールバックテスト"""
+    # テスト用の画像パス
+    image_path = Path("test.jpg")
+    
+    # AIベースのテンプレートマッチングが失敗するようにモック
+    mock_template_matcher.find_best_template_with_ai = AsyncMock(return_value=(None, "AIエラー", False))
+    
+    # 処理を実行
+    result = await processor_with_gemini.process_single_image(image_path)
+    
+    # AIベースのテンプレートマッチングが呼ばれたことを確認
+    mock_template_matcher.find_best_template_with_ai.assert_called_once()
+    
+    # 従来のテンプレートマッチングが呼ばれたことを確認
+    mock_template_matcher.find_best_template.assert_called_once()
+    
+    # 結果が正しいことを確認
+    assert result is not None
+    assert result.image_name == "test.jpg"
+    assert result.selected_template.title == "テストタイトル"
+    assert "スコアリングベース" in result.template_reason
