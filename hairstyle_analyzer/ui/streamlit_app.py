@@ -30,6 +30,7 @@ SESSION_COUPONS = "coupons"
 SESSION_PROGRESS = "progress"
 SESSION_USE_CACHE = "use_cache"
 SESSION_CONFIG = "config"
+SESSION_PROCESSING_STAGES = "processing_stages"  # 処理段階を追跡するための新しいセッションキー
 
 # モジュールのインポート
 from hairstyle_analyzer.data.config_manager import ConfigManager
@@ -88,13 +89,17 @@ def init_session_state():
         st.session_state[SESSION_SALON_URL] = ""
 
 
-def update_progress(current, total, message=""):
+def update_progress(current, total, message="", stage_details=None):
     """進捗状況の更新"""
     if SESSION_PROGRESS in st.session_state:
         progress = st.session_state[SESSION_PROGRESS]
         progress["current"] = current
         progress["total"] = total
         progress["message"] = message
+        
+        # 処理段階の詳細情報を追加
+        if stage_details:
+            progress["stage_details"] = stage_details
         
         # 完了時の処理
         if current >= total and total > 0:
@@ -129,13 +134,23 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
         logging.error("画像パスが空です")
         return []
     
+    # 処理段階の定義
+    processing_stages = [
+        "画像読み込み",
+        "スタイル分析",
+        "テンプレートマッチング",
+        "スタイリスト選択",
+        "タイトル生成"
+    ]
+    
     # 進捗状況の初期化
     progress = {
         "current": 0,
         "total": total,
         "message": "初期化中...",
         "start_time": time.time(),
-        "complete": False
+        "complete": False,
+        "stage_details": f"準備中: {processing_stages[0]}"
     }
     st.session_state[SESSION_PROGRESS] = progress
     
@@ -149,7 +164,6 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 # 進捗状況の更新
                 progress["current"] = i
                 progress["message"] = f"画像 {i+1}/{total} を処理中..."
-                st.session_state[SESSION_PROGRESS] = progress
                 
                 # 文字列パスをPathオブジェクトに変換
                 path_obj = Path(image_path) if isinstance(image_path, str) else image_path
@@ -158,6 +172,18 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 image_name = path_obj.name
                 logging.info(f"画像 {image_name} の処理を開始します")
                 
+                # 処理段階の詳細情報を更新
+                stage_details = f"画像: {image_name}\n"
+                stage_details += f"現在の段階: {processing_stages[0]}\n"
+                stage_details += f"次の段階: {processing_stages[1]}"
+                progress["stage_details"] = stage_details
+                
+                # セッションステートを更新して進捗表示を更新
+                st.session_state[SESSION_PROGRESS] = progress
+                
+                # 明示的な遅延を入れて、UIの更新を確実にする
+                await asyncio.sleep(0.1)
+                
                 # 画像処理
                 if stylists and coupons:
                     # スタイリストとクーポンのデータを渡して処理
@@ -165,6 +191,16 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 else:
                     # 基本処理
                     result = await processor.process_single_image(path_obj, use_cache=use_cache)
+                
+                # 処理段階の詳細情報を更新（完了）
+                stage_details = f"画像: {image_name}\n"
+                stage_details += f"完了した段階: {', '.join(processing_stages)}\n"
+                stage_details += "処理完了"
+                progress["stage_details"] = stage_details
+                st.session_state[SESSION_PROGRESS] = progress
+                
+                # 明示的な遅延を入れて、UIの更新を確実にする
+                await asyncio.sleep(0.1)
                 
                 # 結果にファイル名を追加
                 if result:
@@ -178,12 +214,24 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 logging.error(f"画像処理エラー ({image_name}): {str(e)}")
                 import traceback
                 logging.error(traceback.format_exc())
+                
+                # エラー情報を進捗詳細に追加
+                stage_details = f"画像: {image_name}\n"
+                stage_details += f"エラー発生: {str(e)}\n"
+                stage_details += "次の画像に進みます"
+                progress["stage_details"] = stage_details
+                st.session_state[SESSION_PROGRESS] = progress
+                
+                # 明示的な遅延を入れて、UIの更新を確実にする
+                await asyncio.sleep(0.1)
+                
                 continue
         
         # 進捗状況の更新
         progress["current"] = total
         progress["message"] = "処理完了"
         progress["complete"] = True
+        progress["stage_details"] = f"全ての画像処理が完了しました。合計: {total}画像"
         st.session_state[SESSION_PROGRESS] = progress
         
         return results
@@ -193,6 +241,17 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
         logging.error(f"画像処理全体でエラーが発生: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
+        
+        # エラー情報を進捗詳細に追加
+        if SESSION_PROGRESS in st.session_state:
+            progress = st.session_state[SESSION_PROGRESS]
+            progress["message"] = f"エラーが発生しました: {str(e)}"
+            progress["stage_details"] = f"処理中にエラーが発生しました:\n{str(e)}"
+            st.session_state[SESSION_PROGRESS] = progress
+        
+        # UIの更新を確実にするための遅延
+        await asyncio.sleep(0.1)
+        
         return []
 
 
@@ -274,37 +333,103 @@ def display_progress():
         message = progress["message"]
         
         if total > 0:
+            # プログレスバーのスタイル改善
+            st.markdown("""
+            <style>
+                .stProgress > div > div {
+                    background-color: #4CAF50;
+                    transition: width 0.3s ease;
+                }
+                .progress-label {
+                    font-size: 16px;
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                }
+                .progress-details {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-top: 5px;
+                    color: #555;
+                }
+                .stage-indicator {
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    background-color: #f0f0f0;
+                    margin-right: 5px;
+                    font-size: 14px;
+                }
+                .stage-active {
+                    background-color: #e6f7ff;
+                    border-left: 3px solid #1890ff;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # プログレスバーのラベル表示
+            st.markdown('<p class="progress-label">画像処理の進捗状況</p>', unsafe_allow_html=True)
+            
             # プログレスバーの表示
             progress_val = min(current / total, 1.0)
             progress_bar = st.progress(progress_val)
             
-            # 進捗メッセージの表示
-            if message:
-                st.write(f"状態: {message}")
+            # 進捗情報を2カラムで表示
+            col1, col2 = st.columns(2)
             
-            # 処理時間の表示
-            if progress["start_time"]:
-                elapsed = time.time() - progress["start_time"]
-                if elapsed < 60:
-                    st.write(f"経過時間: {elapsed:.1f}秒")
-                else:
-                    minutes = int(elapsed // 60)
-                    seconds = int(elapsed % 60)
-                    st.write(f"経過時間: {minutes}分{seconds}秒")
+            with col1:
+                # 進捗メッセージの表示
+                if message:
+                    st.write(f"**状態**: {message}")
                 
-                # 残り時間の予測（現在の進捗から）
-                if 0 < current < total:
-                    remaining = (elapsed / current) * (total - current)
-                    if remaining < 60:
-                        st.write(f"推定残り時間: {remaining:.1f}秒")
+                # 処理数と割合の表示
+                percentage = int(progress_val * 100)
+                st.write(f"**進捗**: {current}/{total} 画像 ({percentage}%)")
+            
+            with col2:
+                # 処理時間の表示
+                if progress["start_time"]:
+                    elapsed = time.time() - progress["start_time"]
+                    
+                    # 経過時間のフォーマット
+                    if elapsed < 60:
+                        elapsed_str = f"{elapsed:.1f}秒"
                     else:
-                        minutes = int(remaining // 60)
-                        seconds = int(remaining % 60)
-                        st.write(f"推定残り時間: {minutes}分{seconds}秒")
+                        minutes = int(elapsed // 60)
+                        seconds = int(elapsed % 60)
+                        elapsed_str = f"{minutes}分{seconds}秒"
+                    
+                    st.write(f"**経過時間**: {elapsed_str}")
+                    
+                    # 処理速度の計算と表示
+                    if current > 0:
+                        speed = current / elapsed
+                        if speed < 1:
+                            st.write(f"**処理速度**: {speed:.2f} 画像/秒")
+                        else:
+                            st.write(f"**処理速度**: {speed*60:.1f} 画像/分")
+                    
+                    # 残り時間の予測（現在の進捗から）
+                    if 0 < current < total:
+                        remaining = (elapsed / current) * (total - current)
+                        
+                        # 残り時間のフォーマット
+                        if remaining < 60:
+                            remaining_str = f"{remaining:.1f}秒"
+                        else:
+                            minutes = int(remaining // 60)
+                            seconds = int(remaining % 60)
+                            remaining_str = f"{minutes}分{seconds}秒"
+                        
+                        st.write(f"**推定残り時間**: {remaining_str}")
+            
+            # 処理段階の表示（折りたたみ可能）
+            if "stage_details" in progress:
+                with st.expander("処理の詳細を表示", expanded=False):
+                    st.write("**現在の処理段階**:")
+                    st.write(progress["stage_details"])
             
             # 完了メッセージ
             if progress["complete"]:
-                st.success(f"処理が完了しました: {current}/{total}画像")
+                st.success(f"🎉 処理が完了しました: {current}/{total}画像")
 
 
 def display_results(results):
@@ -842,8 +967,31 @@ def render_main_content():
                 logging.info(f"{len(image_paths)}枚の画像を一時ディレクトリに保存しました")
                 
                 # プログレスバーの表示
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+                progress_container = st.container()
+                with progress_container:
+                    # プログレスバーのスタイル改善
+                    st.markdown("""
+                    <style>
+                        .stProgress > div > div {
+                            background-color: #4CAF50;
+                            transition: width 0.3s ease;
+                        }
+                        .progress-label {
+                            font-size: 16px;
+                            font-weight: bold;
+                            margin-bottom: 5px;
+                        }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # プログレスバーのラベル表示
+                    st.markdown('<p class="progress-label">画像処理の進捗状況</p>', unsafe_allow_html=True)
+                    
+                    # プログレスバーと状態テキスト
+                    progress_bar = st.progress(0)
+                    col1, col2 = st.columns(2)
+                    status_text = col1.empty()
+                    time_text = col2.empty()
                 
                 # 初期化
                 processor = st.session_state[SESSION_PROCESSOR]
@@ -851,10 +999,75 @@ def render_main_content():
                 # 非同期処理を実行
                 with st.spinner("画像を処理中..."):
                     # 進捗コールバック関数
-                    def update_progress(current, total):
-                        progress = float(current) / float(total)
-                        progress_bar.progress(progress)
-                        status_text.text(f"処理中: {current}/{total} ({int(progress * 100)}%)")
+                    def update_progress_callback(current, total, message=""):
+                        # セッションから最新の進捗情報を取得
+                        if SESSION_PROGRESS in st.session_state:
+                            progress_data = st.session_state[SESSION_PROGRESS]
+                            # 処理中の画像のインデックス
+                            img_index = progress_data.get("current", 0)
+                            # 総画像数
+                            total_images = progress_data.get("total", 1)
+                            
+                            # 各画像の進捗を5ステップに分割
+                            # 画像ごとの処理進捗を計算（0-1の範囲）
+                            image_progress = float(current) / float(total) if total > 0 else 0
+                            
+                            # 全体の進捗を計算（0-1の範囲）
+                            # 前の画像はすでに完了（各1.0）、現在の画像は部分的に完了（0.0-1.0）
+                            overall_progress = (img_index + image_progress) / total_images
+                            
+                            # プログレスバーの更新
+                            progress_bar.progress(overall_progress)
+                            
+                            # 進捗状況のテキスト表示
+                            percentage = int(overall_progress * 100)
+                            status_text.markdown(f"**処理中**: 画像 {img_index+1}/{total_images} ({percentage}%)<br>**状態**: {message}", unsafe_allow_html=True)
+                            
+                            # 経過時間と推定残り時間の表示
+                            if "start_time" in progress_data:
+                                elapsed = time.time() - progress_data["start_time"]
+                                
+                                # 経過時間のフォーマット
+                                if elapsed < 60:
+                                    elapsed_str = f"{elapsed:.1f}秒"
+                                else:
+                                    minutes = int(elapsed // 60)
+                                    seconds = int(elapsed % 60)
+                                    elapsed_str = f"{minutes}分{seconds}秒"
+                                
+                                time_info = f"**経過時間**: {elapsed_str}<br>"
+                                
+                                # 処理速度と残り時間の計算（現在の画像も考慮）
+                                # 完了した画像 + 現在の画像の進捗
+                                completed_progress = img_index + image_progress
+                                if completed_progress > 0:
+                                    # 1画像あたりの平均秒数
+                                    avg_seconds_per_image = elapsed / completed_progress
+                                    # 残りの画像数
+                                    remaining_images = total_images - completed_progress
+                                    # 残り時間の予測
+                                    remaining = avg_seconds_per_image * remaining_images
+                                    
+                                    # 処理速度の表示
+                                    images_per_minute = 60 / avg_seconds_per_image
+                                    if images_per_minute < 1:
+                                        speed_str = f"{images_per_minute*60:.1f} 画像/時間"
+                                    else:
+                                        speed_str = f"{images_per_minute:.1f} 画像/分"
+                                    
+                                    time_info += f"**処理速度**: {speed_str}<br>"
+                                    
+                                    # 残り時間の表示
+                                    if remaining < 60:
+                                        remaining_str = f"{remaining:.1f}秒"
+                                    else:
+                                        minutes = int(remaining // 60)
+                                        seconds = int(remaining % 60)
+                                        remaining_str = f"{minutes}分{seconds}秒"
+                                    
+                                    time_info += f"**推定残り時間**: {remaining_str}"
+                                
+                                time_text.markdown(time_info, unsafe_allow_html=True)
                     
                     # スタイリストとクーポンのデータを取得
                     stylists = st.session_state.get(SESSION_STYLISTS, [])
@@ -870,11 +1083,18 @@ def render_main_content():
                     use_cache = st.session_state.get(SESSION_USE_CACHE, True)
                     
                     # 処理の実行（スタイリストとクーポンのデータとキャッシュ設定を渡す）
+                    # 進捗コールバック関数をセット
+                    processor.set_progress_callback(lambda current, total, message: update_progress_callback(current, total, message))
                     results = asyncio.run(process_images(processor, image_paths, stylists, coupons, use_cache))
                     
                     # 処理完了
                     progress_bar.progress(1.0)
-                    status_text.text("処理完了！")
+                    status_text.markdown("**処理完了**！🎉", unsafe_allow_html=True)
+                    
+                    # 処理詳細の表示
+                    if SESSION_PROGRESS in st.session_state and "stage_details" in st.session_state[SESSION_PROGRESS]:
+                        with progress_container.expander("処理の詳細を表示", expanded=False):
+                            st.write(st.session_state[SESSION_PROGRESS]["stage_details"])
                     
                     # 結果が空でないか確認
                     if not results:
