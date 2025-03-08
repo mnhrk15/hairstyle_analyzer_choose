@@ -13,23 +13,34 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import io
 
 import streamlit as st
 import pandas as pd
 from PIL import Image
 
-# 環境変数の設定
-os.environ["PYTHONIOENCODING"] = "utf-8"
-
-# セッションキー
-SESSION_SALON_URL = "salon_url"
+# セッション変数の定義
 SESSION_PROCESSOR = "processor"
 SESSION_RESULTS = "results"
+SESSION_PROCESSING = "is_processing"
+SESSION_PROCESSED = "is_processed"
+SESSION_USE_CACHE = "use_cache"
+SESSION_CONFIG = "config"
+SESSION_API_WARNING = "api_key_warning_shown"
+SESSION_UPLOADER = "uploader"
+SESSION_DEV_MODE = "dev_mode"
+SESSION_SALON_URL = "salon_url"
 SESSION_STYLISTS = "stylists"
 SESSION_COUPONS = "coupons"
 SESSION_PROGRESS = "progress"
-SESSION_USE_CACHE = "use_cache"
-SESSION_CONFIG = "config"
+
+# アプリケーションバージョン
+APP_VERSION = "1.0.0"
+
+# 環境変数の設定
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
+SESSION_DEV_MODE = "dev_mode"
 
 # モジュールのインポート
 from hairstyle_analyzer.data.config_manager import ConfigManager
@@ -62,30 +73,43 @@ from hairstyle_analyzer.utils.async_context import progress_tracker
 from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo
 
 
-def init_session_state():
-    """セッションステートを初期化"""
-    # セッション変数の初期化
+def initialize_session_state():
+    """セッション状態を初期化する"""
+    # 処理済み画像の格納用
+    if SESSION_RESULTS not in st.session_state:
+        st.session_state[SESSION_RESULTS] = {}
+    
+    # 処理中フラグ
+    if SESSION_PROCESSING not in st.session_state:
+        st.session_state[SESSION_PROCESSING] = False
+    
+    # 処理済みフラグ
+    if SESSION_PROCESSED not in st.session_state:
+        st.session_state[SESSION_PROCESSED] = False
+    
+    # プロセッサーオブジェクト
     if SESSION_PROCESSOR not in st.session_state:
         st.session_state[SESSION_PROCESSOR] = None
-    if SESSION_RESULTS not in st.session_state:
-        st.session_state[SESSION_RESULTS] = []
-    if SESSION_PROGRESS not in st.session_state:
-        st.session_state[SESSION_PROGRESS] = {
-            "current": 0,
-            "total": 0,
-            "message": "",
-            "start_time": None,
-            "complete": False
-        }
-    if SESSION_STYLISTS not in st.session_state:
-        st.session_state[SESSION_STYLISTS] = []
-    if SESSION_COUPONS not in st.session_state:
-        st.session_state[SESSION_COUPONS] = []
+    
+    # キャッシュ使用設定
     if SESSION_USE_CACHE not in st.session_state:
         st.session_state[SESSION_USE_CACHE] = True
-    # APIキーのセッション変数初期化は削除
+    
+    # サロンURL設定
     if SESSION_SALON_URL not in st.session_state:
         st.session_state[SESSION_SALON_URL] = ""
+    
+    # APIキー警告表示フラグ
+    if SESSION_API_WARNING not in st.session_state:
+        st.session_state[SESSION_API_WARNING] = False
+    
+    # アップローダーキー
+    if SESSION_UPLOADER not in st.session_state:
+        st.session_state[SESSION_UPLOADER] = "uploader"
+    
+    # 開発者モード
+    if SESSION_DEV_MODE not in st.session_state:
+        st.session_state[SESSION_DEV_MODE] = False
 
 
 def update_progress(current, total, message=""):
@@ -219,17 +243,25 @@ def create_processor(config_manager):
         cache_manager = CacheManager(config_manager.paths.cache_file, config_manager.cache)
         logging.info(f"キャッシュファイル: {config_manager.paths.cache_file}")
         
-        # APIキーの確認と取得
-        api_key = get_api_key()
-        if not api_key:
-            logging.warning("APIキーが設定されていません。画像処理は機能しません。")
+        # GeminiServiceの初期化
+        try:
+            gemini_service = GeminiService(config_manager.gemini)
+            
+            # APIキーの確認と設定
+            api_key = get_api_key()
+            if api_key:
+                # APIキーの設定を試みる
+                try:
+                    gemini_service.set_api_key(api_key)
+                    logging.info("APIキーを正常に設定しました")
+                except Exception as e:
+                    logging.error(f"APIキー設定中にエラーが発生: {str(e)}")
+            else:
+                logging.warning("APIキーが設定されていないため、一部の機能が制限されます")
+        except Exception as e:
+            logging.error(f"GeminiService初期化中にエラーが発生: {str(e)}")
+            gemini_service = None
         
-        # GeminiServiceの初期化（APIキーを直接コンストラクタに渡す）
-        # コンフィグにAPIキーを設定
-        config_manager.gemini.api_key = api_key
-        
-        # APIキーを含むコンフィグでGeminiServiceを初期化
-        gemini_service = GeminiService(config_manager.gemini)
         logging.info(f"Gemini API設定: モデル={config_manager.gemini.model}")
         
         # 各コアコンポーネントの初期化
@@ -690,92 +722,21 @@ def render_sidebar(config_manager):
             st.session_state[SESSION_PROCESSOR] = processor
         
 
-def convert_to_process_results(results):
-    """結果をProcessResultオブジェクトに変換する関数"""
-    from hairstyle_analyzer.core.processor import ProcessResult
-    
-    process_results = []
-    for result in results:
-        if isinstance(result, dict):
-            # 辞書の場合はProcessResultオブジェクトに変換
-            image_path = result.get("image_path", "")
-            title = result.get("title", "")
-            template_id = result.get("template_id", "")
-            template_name = result.get("template_name", "")
-            stylist_name = result.get("stylist_name", "")
-            coupon_name = result.get("coupon_name", "")
-            analysis_results = result.get("analysis_results", {})
-            
-            process_result = ProcessResult(
-                image_path=image_path,
-                title=title,
-                template_id=template_id,
-                template_name=template_name,
-                stylist_name=stylist_name,
-                coupon_name=coupon_name,
-                analysis_results=analysis_results
-            )
-            
-            process_results.append(process_result)
-        else:
-            # すでにProcessResultオブジェクトの場合はそのまま追加
-            process_results.append(result)
-    
-    return process_results
-
-def generate_excel_download(processor, results, title="タイトル生成が完了しました。"):
-    """プロセッサーを使用してExcelファイルを生成し、ダウンロードボタンを表示する関数"""
-    try:
-        # プロセッサーの結果をクリア
-        processor.clear_results()
-        
-        # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
-        process_results = convert_to_process_results(results)
-        processor.results.extend(process_results)
-        
-        # Excelバイナリデータを取得
-        excel_bytes = processor.get_excel_binary()
-        
-        # Excelファイルの生成
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"hairstyle_analysis_{timestamp}.xlsx"
-        
-        # 通知メッセージとダウンロードボタンを表示
-        st.success(f"{title}下のボタンをクリックしてExcelファイルをダウンロードしてください。")
-        
-        # 目立つスタイルでダウンロードボタンを表示
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="⬇️ Excelファイルをダウンロード ⬇️",
-                data=excel_bytes,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="クリックしてExcelファイルをダウンロード",
-                type="primary",
-                use_container_width=True
-            )
-        
-        # 少しスペースを追加
-        st.write("")
-        
-        return True
-    
-    except Exception as e:
-        logging.error(f"Excel出力中にエラーが発生しました: {str(e)}")
-        import traceback
-        logging.error(traceback.format_exc())
-        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
-        return False
-
 def render_main_content():
-    """メインコンテンツを表示する関数"""
+    """メインコンテンツの表示"""
+    st.title("ヘアスタイル分析ツール")
     
-    # 必要な関数をローカルスコープにインポート（名前解決エラー回避のため）
-    from hairstyle_analyzer.ui.streamlit_app import convert_to_process_results, generate_excel_download
-    
-    # タイトル表示
-    st.write("# 🔍 ヘアスタイル画像解析システム")
+    # APIキーの確認
+    api_key = get_api_key()
+    if not api_key and SESSION_API_WARNING not in st.session_state:
+        st.warning(
+            "Gemini APIキーが設定されていません。タイトル生成機能は利用できません。"
+            "\n\n"
+            "APIキーを設定するには以下のいずれかの方法を使用してください：\n"
+            "1. プロジェクトルートに`.env`ファイルを作成し、`GEMINI_API_KEY=your_api_key`を追加\n"
+            "2. `.streamlit/secrets.toml`ファイルを作成し、`GEMINI_API_KEY = \"your_api_key\"`を追加"
+        )
+        st.session_state[SESSION_API_WARNING] = True
     
     # 説明テキスト
     st.markdown("""
@@ -840,6 +801,19 @@ def render_main_content():
                     return
                 
                 logging.info(f"{len(image_paths)}枚の画像を一時ディレクトリに保存しました")
+                
+                # APIキーの確認と警告表示
+                api_key = get_api_key()
+                if not api_key:
+                    st.warning("""
+                    **Gemini APIキーが設定されていないため、AI分析機能が制限されます。**
+                    
+                    デモモードで実行を続行します。完全な機能を利用するには、以下のいずれかの方法でAPIキーを設定してください：
+                    1. `.env`ファイルに`GEMINI_API_KEY=your_api_key_here`を追加
+                    2. `.streamlit/secrets.toml`ファイルに`GEMINI_API_KEY = "your_api_key_here"`を追加
+                    
+                    APIキーを設定したら、ページを再読み込みしてください。
+                    """)
                 
                 # プログレスバーの表示
                 progress_bar = st.progress(0)
@@ -1018,33 +992,33 @@ def handle_image_upload(uploaded_files):
 def get_api_key():
     """APIキーを取得する関数"""
     try:
-        # 環境変数からの取得を最初に試みる（.envファイルから）
+        # Streamlit Secretsからの取得を試みる（エラーメッセージを抑制）
+        try:
+            if "GEMINI_API_KEY" in st.secrets:
+                api_key = st.secrets["GEMINI_API_KEY"]
+                logging.info("Streamlit Secretsからのキー取得: 成功")
+                return api_key
+        except Exception as e:
+            # st.secretsエラーを抑制し、詳細をデバッグレベルでのみログに記録
+            logging.debug(f"Streamlit Secretsからのキー取得に失敗: {str(e)}")
+            # エラーは表示せず、次の方法を試みる
+        
+        # 環境変数からの取得を試みる
         if "GEMINI_API_KEY" in os.environ:
             api_key = os.environ["GEMINI_API_KEY"]
             logging.info("環境変数からのキー取得: 成功")
             return api_key
-            
-        # Streamlit Secretsからの取得を試みる（抑制された警告で）
-        # シークレットの存在を事前にチェック
-        secrets_path = Path(".streamlit/secrets.toml")
-        home_secrets_path = Path.home() / ".streamlit/secrets.toml"
-        
-        if secrets_path.exists() or home_secrets_path.exists():
-            # シークレットファイルが存在する場合のみアクセスを試みる
-            try:
-                if "GEMINI_API_KEY" in st.secrets:
-                    api_key = st.secrets["GEMINI_API_KEY"]
-                    logging.info("Streamlit Secretsからのキー取得: 成功")
-                    return api_key
-            except Exception as e:
-                # シークレットアクセスのエラーは抑制する（ログのみ）
-                logging.debug(f"シークレットアクセス中の例外（無視します）: {str(e)}")
-        else:
-            # シークレットファイルが存在しない場合はデバッグログのみ
-            logging.debug("secrets.tomlファイルが見つかりません。環境変数のみを使用します。")
         
         # APIキーが見つからなかった場合の処理
-        logging.warning("APIキーが設定されていません。.envファイルでGEMINI_API_KEYを設定してください。")
+        logging.warning("APIキーが設定されていません")
+        
+        # ユーザーへのガイダンスを表示（APIキーがなくても他の機能は使える）
+        print("注意: GEMINI_API_KEYが設定されていません。一部の機能は制限されます。")
+        print("APIキーを設定するには、以下のいずれかの方法を使用してください:")
+        print("1. .streamlit/secrets.tomlファイルを作成する (.streamlitディレクトリをプロジェクトルートに作成し、その中にsecrets.tomlを作成)")
+        print("2. .envファイルにGEMINI_API_KEY=あなたのキーを追加する (プロジェクトルートに.envファイルを作成)")
+        print("詳細はSTREAMLIT_DEPLOY.mdを参照してください。")
+        
         return None
             
     except Exception as e:
@@ -1052,45 +1026,127 @@ def get_api_key():
         return None
 
 
-def run_streamlit_app(config_manager: ConfigManager, skip_page_config: bool = False):
-    """
-    Streamlitアプリケーションを実行する
-    
-    Args:
-        config_manager: 設定マネージャー
-        skip_page_config: Trueの場合、ページ設定（st.set_page_config）をスキップする
-    """
-    # セッションの初期化
-    init_session_state()
-    
-    # セッションに設定マネージャーを保存
-    st.session_state[SESSION_CONFIG] = config_manager
-    
-    # ページ設定（skip_page_configがFalseの場合のみ実行）
+def run_streamlit_app(skip_page_config=False):
+    """Streamlit アプリケーションを実行します"""
+    # 設定ページ
     if not skip_page_config:
         st.set_page_config(
-            page_title="ヘアスタイル画像解析システム",
-            page_icon="💇",
-            layout="wide",
+            page_title="ヘアスタイル分析ツール",
+            page_icon="✂️",
+            layout="wide"
         )
     
-    # サイドバーの表示
-    render_sidebar(config_manager)
+    # 初期設定
+    initialize_session_state()
+    setup_logging()
     
-    # メインコンテンツ
-    render_main_content()
+    # 設定マネージャーの取得または初期化
+    config_manager = st.session_state.get(SESSION_CONFIG)
+    if not config_manager:
+        from hairstyle_analyzer.config.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        st.session_state[SESSION_CONFIG] = config_manager
+        logging.info("設定マネージャーを初期化しました")
     
-    # フッター
-    st.write("---")
-    st.write("© 2025 Hairstyle Analyzer System")
+    # タイトルとスタイル
+    st.title("ヘアスタイル分析ツール")
+    load_styles()
+    
+    # APIキーの確認
+    api_key = get_api_key()
+    if not api_key and SESSION_API_WARNING not in st.session_state:
+        st.warning(
+            "Gemini APIキーが設定されていません。タイトル生成機能は利用できません。"
+            "\n\n"
+            "APIキーを設定するには以下のいずれかの方法を使用してください：\n"
+            "1. プロジェクトルートに`.env`ファイルを作成し、`GEMINI_API_KEY=your_api_key`を追加\n"
+            "2. `.streamlit/secrets.toml`ファイルを作成し、`GEMINI_API_KEY = \"your_api_key\"`を追加"
+        )
+        st.session_state[SESSION_API_WARNING] = True
+    
+    # タブの設定
+    tab1, tab2 = st.tabs(["画像分析", "設定"])
+    
+    # タブ1: 画像分析タブ
+    with tab1:
+        # 画像アップロードと処理
+        uploaded_files = st.file_uploader("画像ファイルをアップロードしてください", 
+                                          type=["png", "jpg", "jpeg"], 
+                                          accept_multiple_files=True,
+                                          key=SESSION_UPLOADER)
+        
+        # 情報表示エリア
+        info_area = st.empty()
+        
+        # タイトル生成ボタン
+        if st.button("タイトル生成", disabled=len(get_uploaded_images()) == 0):
+            # APIキーが設定されているか確認
+            api_key = get_api_key()
+            if not api_key:
+                st.error(
+                    "Gemini APIキーが設定されていないため、タイトル生成ができません。"
+                    "\n\n"
+                    "APIキーを設定するには以下のいずれかの方法を使用してください：\n"
+                    "1. プロジェクトルートに`.env`ファイルを作成し、`GEMINI_API_KEY=your_api_key`を追加\n"
+                    "2. `.streamlit/secrets.toml`ファイルを作成し、`GEMINI_API_KEY = \"your_api_key\"`を追加"
+                )
+            else:
+                # 画像処理の実行
+                process_uploaded_images()
+            
+        # 結果表示
+        display_results()
+    
+    # タブ2: 設定タブ
+    with tab2:
+        # キャッシュ使用設定
+        use_cache = st.checkbox("キャッシュを使用する", 
+                                value=st.session_state.get(SESSION_USE_CACHE, True),
+                                key=SESSION_USE_CACHE)
+        
+        st.write("キャッシュを使用すると、同じ画像に対する分析結果が再利用され、処理時間が短縮されます。")
+        
+        # キャッシュクリアボタン
+        if st.button("キャッシュをクリア"):
+            clear_cache()
+            st.success("キャッシュをクリアしました")
+        
+        # アプリ情報
+        st.markdown("---")
+        st.markdown("### アプリケーション情報")
+        st.markdown(f"バージョン: {APP_VERSION}")
+        
+        # 開発者モード
+        st.markdown("---")
+        st.markdown("### 開発者設定")
+        dev_mode = st.checkbox("開発者モード", 
+                              value=st.session_state.get(SESSION_DEV_MODE, False),
+                              key=SESSION_DEV_MODE)
+        
+        if dev_mode:
+            if st.button("セッション状態をクリア"):
+                clear_session_state()
+                st.experimental_rerun()
+                
+            st.markdown("#### セッション状態")
+            st.json({k: str(v) if not isinstance(v, (int, float, str, bool, type(None))) else v 
+                    for k, v in st.session_state.items()})
+            
+            # プロセッサー情報
+            st.markdown("#### プロセッサー情報")
+            processor = st.session_state.get(SESSION_PROCESSOR)
+            if processor:
+                st.write(f"プロセッサー: {type(processor).__name__}")
+                st.write(f"画像アナライザー: {type(processor.image_analyzer).__name__}")
+                st.write(f"テンプレートマッチャー: {type(processor.template_matcher).__name__}")
+                st.write(f"スタイルマッチャー: {type(processor.style_matcher).__name__}")
+            else:
+                st.write("プロセッサーは初期化されていません")
 
 
 if __name__ == "__main__":
-    # 設定マネージャーの初期化
-    config_manager = ConfigManager("config/config.yaml")
-    
     # アプリケーションの実行
-    run_streamlit_app(config_manager)
+    run_streamlit_app()
 
 # エラーハンドリング関数
 def display_error(e):
@@ -1121,3 +1177,428 @@ class StreamlitErrorHandler:
             st.error(f"エラーが発生しました: {exc_val}")
             return True  # 例外を処理済みとする
         return False
+
+
+def convert_to_process_results(results):
+    """辞書型の結果をProcessResultオブジェクトのリストに変換する関数"""
+    process_results = []
+    
+    for result in results:
+        if isinstance(result, dict):
+            # 辞書型の場合、ProcessResultオブジェクトに変換
+            
+            # style_analysisの取得と変換
+            style_analysis_dict = result.get('style_analysis', {})
+            if isinstance(style_analysis_dict, dict):
+                style_analysis = StyleAnalysis(
+                    category=style_analysis_dict.get('category', ''),
+                    features=style_analysis_dict.get('features', []),
+                    colors=style_analysis_dict.get('colors', []),
+                    textures=style_analysis_dict.get('textures', [])
+                )
+            else:
+                style_analysis = style_analysis_dict
+            
+            # attribute_analysisの取得と変換
+            attribute_analysis_dict = result.get('attribute_analysis', {})
+            if isinstance(attribute_analysis_dict, dict):
+                attribute_analysis = AttributeAnalysis(
+                    sex=attribute_analysis_dict.get('sex', ''),
+                    length=attribute_analysis_dict.get('length', '')
+                )
+            else:
+                attribute_analysis = attribute_analysis_dict
+            
+            # selected_templateの取得と変換
+            template_dict = result.get('selected_template', {})
+            if isinstance(template_dict, dict):
+                template = Template(
+                    category=template_dict.get('category', ''),
+                    title=template_dict.get('title', ''),
+                    menu=template_dict.get('menu', ''),
+                    comment=template_dict.get('comment', ''),
+                    hashtag=template_dict.get('hashtag', '')
+                )
+            else:
+                template = template_dict
+            
+            # selected_stylistの取得と変換
+            stylist_dict = result.get('selected_stylist', {})
+            if isinstance(stylist_dict, dict):
+                stylist = StylistInfo(
+                    name=stylist_dict.get('name', ''),
+                    specialties=stylist_dict.get('specialties', ''),
+                    description=stylist_dict.get('description', '')
+                )
+            else:
+                stylist = stylist_dict
+            
+            # selected_couponの取得と変換
+            coupon_dict = result.get('selected_coupon', {})
+            if isinstance(coupon_dict, dict):
+                coupon = CouponInfo(
+                    name=coupon_dict.get('name', ''),
+                    price=coupon_dict.get('price', 0),
+                    description=coupon_dict.get('description', ''),
+                    categories=coupon_dict.get('categories', []),
+                    conditions=coupon_dict.get('conditions', {})
+                )
+            else:
+                coupon = coupon_dict
+            
+            # ProcessResultオブジェクトの作成
+            process_result = ProcessResult(
+                image_name=result.get('image_name', '不明'),
+                style_analysis=style_analysis,
+                attribute_analysis=attribute_analysis,
+                selected_template=template,
+                selected_stylist=stylist,
+                selected_coupon=coupon,
+                processed_at=result.get('processed_at', datetime.now())
+            )
+            
+            process_results.append(process_result)
+        else:
+            # すでにProcessResultオブジェクトの場合はそのまま追加
+            process_results.append(result)
+    
+    return process_results
+
+def generate_excel_download(processor, results, title="タイトル生成が完了しました。"):
+    """プロセッサーを使用してExcelファイルを生成し、ダウンロードボタンを表示する関数"""
+    try:
+        # プロセッサーの結果をクリア
+        processor.clear_results()
+        
+        # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
+        process_results = convert_to_process_results(results)
+        processor.results.extend(process_results)
+        
+        # Excelバイナリデータを取得
+        excel_bytes = processor.get_excel_binary()
+        
+        # Excelファイルの生成
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"hairstyle_analysis_{timestamp}.xlsx"
+        
+        # 通知メッセージとダウンロードボタンを表示
+        st.success(f"{title}下のボタンをクリックしてExcelファイルをダウンロードしてください。")
+        
+        # 目立つスタイルでダウンロードボタンを表示
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.download_button(
+                label="⬇️ Excelファイルをダウンロード ⬇️",
+                data=excel_bytes,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="クリックしてExcelファイルをダウンロード",
+                type="primary",
+                use_container_width=True
+            )
+        
+        # 少しスペースを追加
+        st.write("")
+        
+        return True
+    
+    except Exception as e:
+        logging.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        return False
+
+
+def clear_session_state():
+    """セッション状態をクリアする"""
+    # 保持する必要のある設定を一時保存
+    config = st.session_state.get(SESSION_CONFIG)
+    use_cache = st.session_state.get(SESSION_USE_CACHE, True)
+    salon_url = st.session_state.get(SESSION_SALON_URL, "")
+    dev_mode = st.session_state.get(SESSION_DEV_MODE, False)
+    
+    # セッション状態をクリア
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    
+    # 必要な設定を復元
+    st.session_state[SESSION_CONFIG] = config
+    st.session_state[SESSION_USE_CACHE] = use_cache
+    st.session_state[SESSION_SALON_URL] = salon_url
+    st.session_state[SESSION_DEV_MODE] = dev_mode
+    
+    # 基本的なセッション状態を再初期化
+    initialize_session_state()
+
+
+def get_uploaded_images():
+    """アップロードされた画像の一覧を取得"""
+    if SESSION_UPLOADER not in st.session_state or not st.session_state[SESSION_UPLOADER]:
+        return []
+    
+    uploaded_files = st.session_state[SESSION_UPLOADER]
+    if not uploaded_files:
+        return []
+    
+    return uploaded_files
+
+def process_uploaded_images():
+    """アップロードされた画像を処理"""
+    uploaded_files = get_uploaded_images()
+    if not uploaded_files:
+        st.warning("画像がアップロードされていません。")
+        return
+    
+    # 処理中の状態を設定
+    st.session_state[SESSION_PROCESSING] = True
+    st.session_state[SESSION_PROCESSED] = False
+    st.session_state[SESSION_RESULTS] = {}
+    
+    # 設定マネージャーの取得
+    config_manager = st.session_state.get(SESSION_CONFIG)
+    if not config_manager:
+        st.error("設定マネージャーが初期化されていません。")
+        st.session_state[SESSION_PROCESSING] = False
+        return
+    
+    # プロセッサーの取得・作成
+    processor = st.session_state.get(SESSION_PROCESSOR)
+    if not processor:
+        processor = create_processor(config_manager)
+        if not processor:
+            st.error("プロセッサーの初期化に失敗しました。")
+            st.session_state[SESSION_PROCESSING] = False
+            return
+        st.session_state[SESSION_PROCESSOR] = processor
+    
+    # プログレスバーの初期化
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # 画像の処理
+        results = {}
+        total_files = len(uploaded_files)
+        
+        for idx, uploaded_file in enumerate(uploaded_files):
+            # 進捗状況の更新
+            progress = (idx / total_files)
+            progress_bar.progress(progress)
+            status_text.text(f"処理中... ({idx+1}/{total_files})")
+            
+            # 画像データの準備
+            try:
+                image_bytes = uploaded_file.getvalue()
+                filename = uploaded_file.name
+                image_data = ImageData(
+                    content=image_bytes,
+                    filename=filename,
+                    file_id=f"img_{idx+1}"
+                )
+                
+                # 画像の処理
+                result = process_image(processor, image_data)
+                if result:
+                    results[filename] = result
+            except Exception as e:
+                logging.error(f"画像処理エラー ({filename}): {str(e)}")
+                st.error(f"画像「{filename}」の処理中にエラーが発生しました: {str(e)}")
+        
+        # 処理完了
+        progress_bar.progress(1.0)
+        status_text.text("処理完了!")
+        
+        # 結果の保存
+        st.session_state[SESSION_RESULTS] = results
+        st.session_state[SESSION_PROCESSED] = True
+        
+        # 結果があるか確認
+        if not results:
+            st.warning("処理結果が得られませんでした。APIキーの設定と画像を確認してください。")
+    except Exception as e:
+        logging.error(f"処理中にエラーが発生: {str(e)}")
+        st.error(f"処理中にエラーが発生しました: {str(e)}")
+    finally:
+        # 処理状態のリセット
+        st.session_state[SESSION_PROCESSING] = False
+
+def process_image(processor, image_data):
+    """単一画像を処理"""
+    if not processor:
+        logging.error("プロセッサーが初期化されていません")
+        return None
+    
+    try:
+        result = processor.process_single_image(image_data)
+        return result
+    except Exception as e:
+        logging.error(f"画像処理エラー ({image_data.filename}): {str(e)}")
+        return None
+
+def display_results():
+    """処理結果の表示"""
+    if not st.session_state.get(SESSION_PROCESSED, False):
+        return
+    
+    results = st.session_state.get(SESSION_RESULTS, {})
+    if not results:
+        st.warning("表示する結果がありません。")
+        return
+    
+    # 結果の表示
+    st.subheader("分析結果")
+    
+    # データフレームの作成
+    data = []
+    for filename, result in results.items():
+        if not result or not hasattr(result, 'title') or not hasattr(result, 'image_data'):
+            continue
+        
+        # 画像の表示用データの作成
+        image_bytes = result.image_data.content
+        
+        data.append({
+            "ファイル名": filename,
+            "生成タイトル": result.title,
+            "画像データ": image_bytes
+        })
+    
+    if not data:
+        st.warning("表示可能な結果がありません。")
+        return
+    
+    # データフレームの作成と表示
+    df = pd.DataFrame(data)
+    
+    # 各行の表示
+    for i, row in df.iterrows():
+        col1, col2 = st.columns([1, 2])
+        
+        # 画像の表示
+        with col1:
+            try:
+                image = Image.open(io.BytesIO(row["画像データ"]))
+                st.image(image, caption=row["ファイル名"], use_column_width=True)
+            except Exception as e:
+                st.error(f"画像の表示エラー: {str(e)}")
+        
+        # タイトルの表示
+        with col2:
+            st.markdown(f"### 生成タイトル")
+            st.write(row["生成タイトル"])
+    
+    # Excel出力ボタン
+    if st.button("Excel出力"):
+        excel_data = generate_excel()
+        if excel_data:
+            # ダウンロードボタンの表示
+            now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"hairstyle_results_{now}.xlsx"
+            
+            st.download_button(
+                label="Excelファイルをダウンロード",
+                data=excel_data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+            st.success(f"Excelファイル '{filename}' の準備ができました。")
+
+def load_styles():
+    """CSSスタイルの読み込み"""
+    st.markdown("""
+    <style>
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    h1 {
+        color: #2c3e50;
+        margin-bottom: 1.5rem;
+    }
+    h2 {
+        color: #3498db;
+        margin-top: 1.5rem;
+    }
+    .stButton > button {
+        background-color: #3498db;
+        color: white;
+        font-weight: bold;
+    }
+    .stButton > button:hover {
+        background-color: #2980b9;
+    }
+    .success {
+        color: #27ae60;
+        font-weight: bold;
+    }
+    .error {
+        color: #e74c3c;
+        font-weight: bold;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+def clear_cache():
+    """キャッシュをクリア"""
+    try:
+        # 設定マネージャーを取得
+        config_manager = st.session_state.get(SESSION_CONFIG)
+        if not config_manager:
+            st.error("設定マネージャーが初期化されていません。")
+            return
+        
+        # キャッシュマネージャーの初期化
+        cache_manager = CacheManager(config_manager.paths.cache_file, config_manager.cache)
+        
+        # キャッシュのクリア
+        cache_manager.clear_cache()
+        logging.info("キャッシュをクリアしました")
+        return True
+    except Exception as e:
+        logging.error(f"キャッシュクリア中にエラーが発生: {str(e)}")
+        return False
+
+def generate_excel():
+    """Excelデータの生成"""
+    try:
+        # 設定マネージャーの取得
+        config_manager = st.session_state.get(SESSION_CONFIG)
+        if not config_manager:
+            st.error("設定マネージャーが初期化されていません。")
+            return None
+        
+        # プロセッサーの取得
+        processor = st.session_state.get(SESSION_PROCESSOR)
+        if not processor:
+            st.error("プロセッサーが初期化されていません。")
+            return None
+        
+        # 結果データの取得
+        results = st.session_state.get(SESSION_RESULTS, {})
+        if not results:
+            st.warning("Excel出力する結果がありません。")
+            return None
+        
+        # リスト形式に変換
+        result_list = list(results.values())
+        
+        # サロンURL取得
+        salon_url = st.session_state.get(SESSION_SALON_URL, "")
+        
+        # Excel生成
+        try:
+            excel_bytes = processor.excel_exporter.generate_excel(
+                results=result_list,
+                salon_url=salon_url
+            )
+            return excel_bytes
+        except Exception as e:
+            logging.error(f"Excel生成中にエラーが発生: {str(e)}")
+            st.error(f"Excel生成中にエラーが発生しました: {str(e)}")
+            return None
+    except Exception as e:
+        logging.error(f"Excel出力中にエラーが発生: {str(e)}")
+        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        return None

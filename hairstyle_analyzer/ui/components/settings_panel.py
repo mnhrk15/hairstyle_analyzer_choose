@@ -36,11 +36,11 @@ class SettingsPanelComponent:
                               on_save: Optional[Callable[[], None]] = None, 
                               on_clear_cache: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
         """
-        サイドバーに設定パネルを表示します
+        サイドバーに設定項目を表示する
         
         Args:
-            on_save: 設定保存時のコールバック関数（オプション）
-            on_clear_cache: キャッシュクリア時のコールバック関数（オプション）
+            on_save: 設定保存時に呼び出すコールバック関数
+            on_clear_cache: キャッシュクリア時に呼び出すコールバック関数
             
         Returns:
             更新された設定値の辞書
@@ -50,25 +50,16 @@ class SettingsPanelComponent:
         # 設定値の取得
         settings = {}
         
-        # API設定セクション
-        st.sidebar.header("API設定")
-        
-        # Gemini API設定
-        api_key = st.sidebar.text_input(
-            "Gemini API Key",
-            value=self.config_manager.gemini.api_key,
-            type="password",
-            help="Google AI StudioからGemini APIキーを取得してください。"
-        )
-        settings["gemini_api_key"] = api_key
+        # API設定セクションを削除
         
         # モデル選択
+        st.sidebar.header("モデル設定")
         model_options = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"]
         selected_model = st.sidebar.selectbox(
             "使用するモデル",
             options=model_options,
             index=model_options.index(self.config_manager.gemini.model) if self.config_manager.gemini.model in model_options else 0,
-            help="画像分析に使用するGeminiモデルを選択します。"
+            help="Geminiモデルの種類を選択します。より高品質な結果が必要な場合は上位モデルを選択してください。"
         )
         settings["gemini_model"] = selected_model
         
@@ -165,42 +156,30 @@ class SettingsPanelComponent:
         # 設定の保存ボタン
         if st.sidebar.button("設定を保存", type="primary"):
             try:
-                # API設定の更新
-                if api_key:
-                    self.config_manager.save_api_key(api_key)
-                
                 # その他の設定を更新
                 config_updates = {
                     "gemini": {
-                        "model": selected_model
-                    },
-                    "scraper": {
-                        "base_url": salon_url
+                        "model": selected_model,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens
                     },
                     "processing": {
                         "batch_size": batch_size,
-                        "api_delay": api_delay,
-                        "max_retries": max_retries
-                    },
-                    "cache": {
-                        "ttl_days": cache_ttl,
-                        "max_size": cache_size
-                    },
-                    "paths": {
-                        "output_excel": str(Path(output_dir) / output_filename)
+                        "api_delay": api_delay
                     }
                 }
                 
                 self.config_manager.update_config(config_updates)
-                st.sidebar.success("設定を保存しました。")
                 
-                # コールバック関数の呼び出し
+                # 成功メッセージ
+                st.sidebar.success("設定を保存しました")
+                
+                # コールバック実行
                 if on_save:
                     on_save()
-                    
-            except ConfigError as e:
-                st.sidebar.error(f"設定の保存に失敗しました: {str(e)}")
-                self.logger.error(f"設定保存エラー: {str(e)}")
+            
+            except Exception as e:
+                st.sidebar.error(f"設定の保存中にエラーが発生しました: {str(e)}")
         
         # キャッシュクリアボタン
         if st.sidebar.button("キャッシュをクリア"):
