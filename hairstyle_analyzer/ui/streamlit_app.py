@@ -82,7 +82,7 @@ def init_session_state():
     if SESSION_COUPONS not in st.session_state:
         st.session_state[SESSION_COUPONS] = []
     if SESSION_USE_CACHE not in st.session_state:
-        st.session_state[SESSION_USE_CACHE] = True
+        st.session_state[SESSION_USE_CACHE] = False
     # APIキーのセッション変数初期化は削除
     if SESSION_SALON_URL not in st.session_state:
         st.session_state[SESSION_SALON_URL] = ""
@@ -103,7 +103,7 @@ def update_progress(current, total, message=""):
         st.session_state[SESSION_PROGRESS] = progress
 
 
-async def process_images(processor, image_paths, stylists=None, coupons=None, use_cache=True):
+async def process_images(processor, image_paths, stylists=None, coupons=None, use_cache=False):
     """画像を処理して結果を取得する非同期関数"""
     results = []
     total = len(image_paths)

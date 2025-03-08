@@ -12,7 +12,7 @@ import base64
 import logging
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Union, Tuple, AsyncGenerator
 import re
 import random
 
@@ -25,6 +25,8 @@ from ...utils.errors import GeminiAPIError, ValidationError as AppValidationErro
 from ...utils.image_utils import encode_image, is_valid_image
 from ...utils.async_context import AsyncResource, asynccontextmanager, Timer
 
+# 必要なエラー定義をインポート
+from hairstyle_analyzer.utils.errors import ImageError
 
 class APISession(AsyncResource):
     """
@@ -260,7 +262,7 @@ class GeminiService:
         prompt: str, 
         image_path: Optional[Path] = None, 
         use_fallback: bool = False
-    ) -> AsyncResource:
+    ) -> AsyncGenerator[AsyncResource, None]:
         """
         Gemini API呼び出し用の非同期コンテキストマネージャー
         
