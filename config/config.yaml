@@ -113,7 +113,7 @@ scraper:
   stylist_name_selector: "p.mT10.fs16.b > a"  # スタイリスト名のセレクタ
   stylist_specialties_selector: "div.mT5.fs10 > span.fgPink"  # スタイリスト得意技術のセレクタ
   stylist_description_selector: "div.mT5.fs10.hMin30"  # スタイリスト説明文のセレクタ
-  coupon_page_limit: 5  # クーポンページ数上限
+  coupon_page_limit: 20  # クーポンページ数上限
   timeout: 10  # リクエストタイムアウト（秒）
   max_retries: 3  # 最大リトライ回数
   retry_delay: 1  # リトライ間隔（秒）

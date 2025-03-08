@@ -422,35 +422,64 @@ class ScraperService:
         # 現在のページからクーポンを取得
         coupons = self._extract_coupons_from_page(soup)
         all_coupons.extend(coupons)
+        self.logger.info(f"ページ 1 から {len(coupons)}件のクーポンを取得しました")
         
         # ページネーションを確認
-        page_links = soup.select("p.pa.bottom0.right0 a")
+        page_links = soup.select("p.pa.bottom0.right0")
         max_page = 1
+        has_next_page = False
+        next_page_url = None
         
-        for link in page_links:
-            if "次へ" in link.text:
-                href = link.get("href", "")
-                if "PN" in href:
-                    # ページネーションのパラメータを取得
-                    match = re.search(r"PN(\d+)", href)
-                    if match:
-                        max_page = int(match.group(1))
-                        break
+        # ページネーション情報から最大ページ数を取得（例: "1/3ページ"）
+        if page_links:
+            pagination_text = page_links[0].get_text()
+            self.logger.info(f"ページネーション情報: {pagination_text}")
+            
+            # "X/Yページ" の形式から最大ページ数を抽出
+            pagination_match = re.search(r'(\d+)/(\d+)ページ', pagination_text)
+            if pagination_match:
+                current_page = int(pagination_match.group(1))
+                total_pages = int(pagination_match.group(2))
+                max_page = total_pages
+                self.logger.info(f"ページネーション情報から最大ページ数を検出: {max_page}ページ")
+        
+        # "次へ"リンクを確認
+        next_links = soup.select("p.pa.bottom0.right0 a.iS.arrowPagingR")
+        if next_links:
+            href = next_links[0].get("href", "")
+            if href:
+                has_next_page = True
+                next_page_url = urljoin(coupon_page_url, href)
+                self.logger.info(f"「次へ」リンクを検出: {next_page_url}")
+        
+        self.logger.info(f"検出された最大ページ数: {max_page}")
         
         # 2ページ目以降を処理
-        for page_num in range(2, min(max_page + 1, self.config.coupon_page_limit + 1)):
-            next_page_url = f"{coupon_page_url}PN{page_num}.html"
+        for current_page in range(2, min(max_page + 1, self.config.coupon_page_limit + 1)):
+            page_url = f"{coupon_page_url}PN{current_page}.html"
             
             try:
-                page_content = await self._rate_limited_request(next_page_url)
+                self.logger.info(f"ページ {current_page}/{max_page} を処理中: {page_url}")
+                page_content = await self._rate_limited_request(page_url)
                 soup = self._parse_html(page_content)
                 
                 # 現在のページからクーポンを取得
                 coupons = self._extract_coupons_from_page(soup)
+                
+                # クーポンが取得できなかった場合は警告を出すが処理は続行
+                if not coupons:
+                    self.logger.warning(f"ページ {current_page} にクーポンがありません。")
+                
+                self.logger.info(f"ページ {current_page} から {len(coupons)}件のクーポンを取得しました。現在の合計: {len(all_coupons) + len(coupons)}件")
                 all_coupons.extend(coupons)
                 
+                # 最後のページに達したら終了
+                if current_page == max_page:
+                    self.logger.info(f"最大ページ数({max_page})に達しました。処理を終了します。")
+                    break
+                
             except Exception as e:
-                self.logger.warning(f"ページ {page_num} の取得に失敗: {str(e)}")
+                self.logger.warning(f"ページ {current_page} の取得に失敗: {str(e)}")
                 break
         
         self.logger.info(f"{len(all_coupons)}件のクーポン情報を取得しました")

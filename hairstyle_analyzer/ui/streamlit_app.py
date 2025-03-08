@@ -240,8 +240,14 @@ def display_results(results):
                 selected_template = result.get('selected_template', {})
                 if isinstance(selected_template, dict):
                     title = selected_template.get('title', '')
+                    comment = selected_template.get('comment', '')
+                    menu = selected_template.get('menu', '')
+                    hashtag = selected_template.get('hashtag', '')
                 else:
                     title = getattr(selected_template, 'title', '')
+                    comment = getattr(selected_template, 'comment', '')
+                    menu = getattr(selected_template, 'menu', '')
+                    hashtag = getattr(selected_template, 'hashtag', '')
                 
                 # selected_stylistの取得
                 selected_stylist = result.get('selected_stylist', {})
@@ -263,18 +269,23 @@ def display_results(results):
                 sex = getattr(result.attribute_analysis, 'sex', '')
                 length = getattr(result.attribute_analysis, 'length', '')
                 title = getattr(result.selected_template, 'title', '')
+                comment = getattr(result.selected_template, 'comment', '')
+                menu = getattr(result.selected_template, 'menu', '')
+                hashtag = getattr(result.selected_template, 'hashtag', '')
                 stylist_name = getattr(result.selected_stylist, 'name', '')
                 coupon_name = getattr(result.selected_coupon, 'name', '')
             
-            # データの追加
+            # データの追加 - Excelと同じ順序で表示
             data.append({
-                "画像": image_name,
-                "カテゴリ": category,
+                "スタイリスト名": stylist_name,
+                "クーポン名": coupon_name,
+                "コメント": comment,
+                "スタイルタイトル": title,
                 "性別": sex,
                 "長さ": length,
-                "タイトル": title,
-                "スタイリスト": stylist_name,
-                "クーポン": coupon_name
+                "スタイルメニュー": menu,
+                "ハッシュタグ": hashtag,
+                "画像ファイル名": image_name
             })
         except Exception as e:
             st.error(f"結果の処理中にエラーが発生しました: {str(e)}")

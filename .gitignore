@@ -76,3 +76,7 @@ var/
 
 # Windsurf
 .windsurfrules
+
+# Cursor
+.cursor/
+.cursor/rules
