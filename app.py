@@ -24,7 +24,7 @@ logger.info("ロギングを初期化しました")
 
 # Streamlitページ設定（必ず最初のStreamlitコマンドとして実行）
 st.set_page_config(
-    page_title="ヘアスタイル画像解析システム",
+    page_title="Style Generator",
     page_icon="💇",
     layout="wide",
 )

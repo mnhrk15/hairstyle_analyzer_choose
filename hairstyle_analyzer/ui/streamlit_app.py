@@ -900,12 +900,12 @@ def render_main_content():
     from hairstyle_analyzer.ui.streamlit_app import convert_to_process_results, generate_excel_download
     
     # タイトル表示
-    st.write("# 🔍 ヘアスタイル画像解析システム")
+    st.write("# Style Generator")
     
     # 説明テキスト
     st.markdown("""
     このアプリケーションは、ヘアスタイル画像を分析し、最適なタイトル、説明、スタイリスト、クーポンを提案します。
-    画像をアップロードして「タイトル生成」ボタンをクリックしてください。
+    サロン情報を取得してから、画像をアップロードして「タイトル生成」ボタンをクリックしてください。
     """)
     
     # 画像アップロード部分
@@ -1289,7 +1289,7 @@ def run_streamlit_app(config_manager: ConfigManager, skip_page_config: bool = Fa
     # ページ設定（skip_page_configがFalseの場合のみ実行）
     if not skip_page_config:
         st.set_page_config(
-            page_title="ヘアスタイル画像解析システム",
+            page_title="Style Generator",
             page_icon="💇",
             layout="wide",
         )
@@ -1302,7 +1302,7 @@ def run_streamlit_app(config_manager: ConfigManager, skip_page_config: bool = Fa
     
     # フッター
     st.write("---")
-    st.write("© 2025 Hairstyle Analyzer System")
+    st.write("© Cyber Accel-Advisors")
 
 
 if __name__ == "__main__":
