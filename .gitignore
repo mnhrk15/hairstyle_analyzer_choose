@@ -53,6 +53,10 @@ cache/
 output/
 temp/
 
+# Streamlit
+.streamlit/
+.streamlit/secrets.toml
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
