@@ -8,6 +8,7 @@
 import os
 import sys
 import tempfile
+import hmac
 from pathlib import Path
 import streamlit as st
 import logging
@@ -28,6 +29,29 @@ st.set_page_config(
     page_icon="💇",
     layout="wide",
 )
+
+# パスワード認証機能
+def check_password():
+    """パスワードが正しければ`True`を返します"""
+    def password_entered():
+        """ユーザーが入力したパスワードを確認します"""
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # パスワードを保存しない
+        else:
+            st.session_state["password_correct"] = False
+
+    # パスワードが検証されていれば True を返す
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # パスワード入力フォームを表示
+    st.text_input(
+        "パスワード", type="password", on_change=password_entered, key="password"
+    )
+    if "password_correct" in st.session_state:
+        st.error("😕 パスワードが正しくありません")
+    return False
 
 # プロジェクトルートをPythonパスに追加
 root_dir = Path(__file__).parent
@@ -135,6 +159,21 @@ from hairstyle_analyzer.data.config_manager import ConfigManager
 from hairstyle_analyzer.ui.streamlit_app import run_streamlit_app
 
 if __name__ == "__main__":
+    # パスワード認証の実行（ローカル開発環境ではパスワード認証をスキップ可能）
+    try:
+        is_local_dev = os.environ.get("LOCAL_DEV", "").lower() == "true"
+        if is_local_dev:
+            # ローカル開発環境では認証をスキップ
+            logger.info("ローカル開発環境：パスワード認証をスキップします")
+        else:
+            # パスワード認証を実行
+            if not check_password():
+                st.stop()  # 認証失敗時はアプリを停止
+    except Exception as e:
+        logger.error(f"認証処理中にエラーが発生しました: {str(e)}")
+        st.error("認証システムでエラーが発生しました。管理者にお問い合わせください。")
+        st.stop()
+    
     # 設定マネージャーの初期化
     config_manager = ConfigManager("config/config.yaml")
     
