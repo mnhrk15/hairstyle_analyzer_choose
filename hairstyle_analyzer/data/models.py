@@ -142,6 +142,13 @@ class ExcelConfig(BaseModel):
     headers: Dict[str, str] = Field(description="Excel出力のヘッダー定義")
 
 
+class TextConfig(BaseModel):
+    """テキスト出力設定を表すモデル"""
+    format_template: str = Field(description="テキスト出力のフォーマットテンプレート")
+    encoding: str = Field(default="utf-8", description="テキストファイルのエンコーディング")
+    newline: str = Field(default="\n", description="改行コード")
+
+
 class ProcessingConfig(BaseModel):
     """処理設定を表すモデル"""
     batch_size: int = Field(default=5, description="バッチサイズ")
@@ -177,6 +184,7 @@ class AppConfig(BaseModel):
     gemini: GeminiConfig = Field(description="Gemini API設定")
     scraper: ScraperConfig = Field(description="スクレイパー設定")
     excel: ExcelConfig = Field(description="Excel出力設定")
+    text: TextConfig = Field(description="テキスト出力設定")
     processing: ProcessingConfig = Field(description="処理設定")
     paths: PathsConfig = Field(description="パス設定")
     cache: CacheConfig = Field(description="キャッシュ設定")

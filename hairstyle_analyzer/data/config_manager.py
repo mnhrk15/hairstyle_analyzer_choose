@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from .models import (
     AppConfig, GeminiConfig, ScraperConfig, ExcelConfig,
-    ProcessingConfig, PathsConfig, CacheConfig, LoggingConfig
+    ProcessingConfig, PathsConfig, CacheConfig, LoggingConfig, TextConfig
 )
 
 
@@ -87,6 +87,7 @@ class ConfigManager:
             gemini_dict = self._config_dict.get('gemini', {})
             scraper_dict = self._config_dict.get('scraper', {})
             excel_dict = self._config_dict.get('excel', {})
+            text_dict = self._config_dict.get('text', {})
             processing_dict = self._config_dict.get('processing', {})
             paths_dict = self._config_dict.get('paths', {})
             cache_dict = self._config_dict.get('cache', {})
@@ -109,6 +110,7 @@ class ConfigManager:
                 gemini=GeminiConfig(**gemini_dict),
                 scraper=ScraperConfig(**scraper_dict),
                 excel=ExcelConfig(**excel_dict),
+                text=TextConfig(**text_dict),
                 processing=ProcessingConfig(**processing_dict),
                 paths=PathsConfig(**paths_dict),
                 cache=CacheConfig(**cache_dict),
@@ -302,6 +304,11 @@ class ConfigManager:
     def cache(self) -> CacheConfig:
         """キャッシュ設定モデルを取得"""
         return self._app_config.cache
+    
+    @property
+    def text(self) -> TextConfig:
+        """テキスト出力設定モデルを取得"""
+        return self._app_config.text
     
     @property
     def logging(self) -> LoggingConfig:

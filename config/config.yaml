@@ -162,6 +162,21 @@ excel:
     H: "ハッシュタグ"
     I: "画像ファイル名"
 
+# テキスト出力設定
+text:
+  format_template: |
+    【画像名】{image_name}
+    ①スタイリスト名: {stylist_name}
+    ②コメント: {comment}
+    ③スタイルタイトル: {title}
+    ④性別: {sex}
+    ⑤長さ: {length}
+    ⑥スタイルメニュー: {menu}
+    ⑦クーポン名: {coupon_name}
+    ⑧ハッシュタグ: {hashtag}
+  encoding: "utf-8"
+  newline: "\n"
+
 # 処理設定
 processing:
   batch_size: 5  # バッチサイズ

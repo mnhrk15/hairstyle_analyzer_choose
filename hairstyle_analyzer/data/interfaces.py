@@ -300,3 +300,33 @@ class ExcelExporterProtocol(Protocol):
             Excelバイナリデータ
         """
         ...
+
+
+# テキストエクスポーターのインターフェース
+class TextExporterProtocol(Protocol):
+    """テキストエクスポーターのインターフェース"""
+    
+    def export(self, results: List[ProcessResultProtocol], output_path: Path) -> Path:
+        """
+        処理結果をテキスト形式でエクスポートします。
+        
+        Args:
+            results: 処理結果のリスト
+            output_path: 出力ファイルのパス
+            
+        Returns:
+            エクスポートされたファイルのパス
+        """
+        ...
+    
+    def get_text_content(self, results: List[ProcessResultProtocol]) -> str:
+        """
+        処理結果のテキストデータを取得します。
+        
+        Args:
+            results: 処理結果のリスト
+            
+        Returns:
+            テキストデータ
+        """
+        ...

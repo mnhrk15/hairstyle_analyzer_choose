@@ -44,6 +44,7 @@ from hairstyle_analyzer.core.image_analyzer import ImageAnalyzer
 from hairstyle_analyzer.core.style_matching import StyleMatchingService
 from hairstyle_analyzer.core.excel_exporter import ExcelExporter
 from hairstyle_analyzer.core.processor import MainProcessor
+from hairstyle_analyzer.core.text_exporter import TextExporter
 
 # 新しいアーキテクチャに関連するインポート
 # ※これらのモジュールパスが現在の構造と一致しない場合は、コメントアウトし、必要に応じて修正します
@@ -60,7 +61,7 @@ from hairstyle_analyzer.services.gemini.gemini_service import GeminiService
 # UI コンポーネント
 from hairstyle_analyzer.utils.async_context import progress_tracker
 
-from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo
+from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo, StyleFeatures
 
 
 def init_session_state():
@@ -296,6 +297,7 @@ def create_processor(config_manager):
         template_matcher = TemplateMatcher(template_manager)
         style_matcher = StyleMatchingService(gemini_service)
         excel_exporter = ExcelExporter(config_manager.excel)
+        text_exporter = TextExporter(config_manager.text)
         
         # キャッシュ使用設定の取得
         use_cache = st.session_state.get(SESSION_USE_CACHE, True)
@@ -307,6 +309,7 @@ def create_processor(config_manager):
             template_matcher=template_matcher,
             style_matcher=style_matcher,
             excel_exporter=excel_exporter,
+            text_exporter=text_exporter,
             cache_manager=cache_manager,
             batch_size=config_manager.processing.batch_size,
             api_delay=config_manager.processing.api_delay,
@@ -817,46 +820,100 @@ def render_sidebar(config_manager):
 
 def convert_to_process_results(results):
     """結果をProcessResultオブジェクトに変換する関数"""
-    from hairstyle_analyzer.core.processor import ProcessResult
+    from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo, StyleFeatures
     
     process_results = []
     for result in results:
-        if isinstance(result, dict):
-            # 辞書の場合はProcessResultオブジェクトに変換
-            image_path = result.get("image_path", "")
-            title = result.get("title", "")
-            template_id = result.get("template_id", "")
-            template_name = result.get("template_name", "")
-            stylist_name = result.get("stylist_name", "")
-            coupon_name = result.get("coupon_name", "")
-            analysis_results = result.get("analysis_results", {})
-            
-            process_result = ProcessResult(
-                image_path=image_path,
-                title=title,
-                template_id=template_id,
-                template_name=template_name,
-                stylist_name=stylist_name,
-                coupon_name=coupon_name,
-                analysis_results=analysis_results
-            )
-            
-            process_results.append(process_result)
-        else:
-            # すでにProcessResultオブジェクトの場合はそのまま追加
-            process_results.append(result)
+        try:
+            if isinstance(result, dict):
+                # 辞書の場合はProcessResultオブジェクトに変換
+                # 必要なオブジェクトを作成
+                image_name = result.get("image_name", "")
+                
+                # StyleAnalysisの作成
+                style_analysis_dict = result.get("style_analysis", {})
+                features_dict = style_analysis_dict.get("features", {}) if isinstance(style_analysis_dict, dict) else {}
+                
+                features = StyleFeatures(
+                    color=features_dict.get("color", ""),
+                    cut_technique=features_dict.get("cut_technique", ""),
+                    styling=features_dict.get("styling", ""),
+                    impression=features_dict.get("impression", "")
+                )
+                
+                style_analysis = StyleAnalysis(
+                    category=style_analysis_dict.get("category", "") if isinstance(style_analysis_dict, dict) else "",
+                    features=features,
+                    keywords=style_analysis_dict.get("keywords", []) if isinstance(style_analysis_dict, dict) else []
+                )
+                
+                # AttributeAnalysisの作成
+                attribute_analysis_dict = result.get("attribute_analysis", {})
+                attribute_analysis = AttributeAnalysis(
+                    sex=attribute_analysis_dict.get("sex", "") if isinstance(attribute_analysis_dict, dict) else "",
+                    length=attribute_analysis_dict.get("length", "") if isinstance(attribute_analysis_dict, dict) else ""
+                )
+                
+                # Templateの作成
+                template_dict = result.get("selected_template", {})
+                template = Template(
+                    category=template_dict.get("category", "") if isinstance(template_dict, dict) else "",
+                    title=template_dict.get("title", "") if isinstance(template_dict, dict) else "",
+                    menu=template_dict.get("menu", "") if isinstance(template_dict, dict) else "",
+                    comment=template_dict.get("comment", "") if isinstance(template_dict, dict) else "",
+                    hashtag=template_dict.get("hashtag", "") if isinstance(template_dict, dict) else ""
+                )
+                
+                # StylistInfoの作成
+                stylist_dict = result.get("selected_stylist", {})
+                stylist = StylistInfo(
+                    name=stylist_dict.get("name", "") if isinstance(stylist_dict, dict) else "",
+                    specialties=stylist_dict.get("specialties", "") if isinstance(stylist_dict, dict) else "",
+                    description=stylist_dict.get("description", "") if isinstance(stylist_dict, dict) else ""
+                )
+                
+                # CouponInfoの作成
+                coupon_dict = result.get("selected_coupon", {})
+                coupon = CouponInfo(
+                    name=coupon_dict.get("name", "") if isinstance(coupon_dict, dict) else "",
+                    price=coupon_dict.get("price", 0) if isinstance(coupon_dict, dict) else 0,
+                    description=coupon_dict.get("description", "") if isinstance(coupon_dict, dict) else ""
+                )
+                
+                # ProcessResultの作成
+                process_result = ProcessResult(
+                    image_name=image_name,
+                    style_analysis=style_analysis,
+                    attribute_analysis=attribute_analysis,
+                    selected_template=template,
+                    selected_stylist=stylist,
+                    selected_coupon=coupon,
+                    stylist_reason=result.get("stylist_reason", ""),
+                    coupon_reason=result.get("coupon_reason", ""),
+                    template_reason=result.get("template_reason", "")
+                )
+                
+                process_results.append(process_result)
+            else:
+                # すでにProcessResultオブジェクトの場合はそのまま追加
+                process_results.append(result)
+        except Exception as e:
+            logging.error(f"結果変換中にエラーが発生しました: {str(e)}")
+            import traceback
+            logging.error(traceback.format_exc())
+            # エラーが発生しても他の結果を続行
+            continue
     
     return process_results
 
 def generate_excel_download(processor, results, title="タイトル生成が完了しました。"):
     """プロセッサーを使用してExcelファイルを生成し、ダウンロードボタンを表示する関数"""
     try:
-        # プロセッサーの結果をクリア
-        processor.clear_results()
-        
-        # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
-        process_results = convert_to_process_results(results)
-        processor.results.extend(process_results)
+        # プロセッサーの結果が既に設定されているか確認し、設定されていなければ追加
+        if not processor.results:
+            # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
+            process_results = convert_to_process_results(results)
+            processor.results.extend(process_results)
         
         # Excelバイナリデータを取得
         excel_bytes = processor.get_excel_binary()
@@ -865,8 +922,7 @@ def generate_excel_download(processor, results, title="タイトル生成が完�
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"hairstyle_analysis_{timestamp}.xlsx"
         
-        # 通知メッセージとダウンロードボタンを表示
-        st.success(f"{title}下のボタンをクリックしてExcelファイルをダウンロードしてください。")
+        # 通知メッセージを削除
         
         # 目立つスタイルでダウンロードボタンを表示
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -893,11 +949,54 @@ def generate_excel_download(processor, results, title="タイトル生成が完�
         st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
         return False
 
+def generate_text_download(processor, results, title="タイトル生成が完了しました。"):
+    """プロセッサーを使用してテキストファイルを生成し、ダウンロードボタンを表示する関数"""
+    try:
+        # プロセッサーの結果が既に設定されているか確認し、設定されていなければ追加
+        if not processor.results:
+            # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
+            process_results = convert_to_process_results(results)
+            processor.results.extend(process_results)
+        
+        # テキストデータを取得
+        text_content = processor.get_text_content()
+        
+        # テキストファイルの生成
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"hairstyle_analysis_{timestamp}.txt"
+        
+        # 通知メッセージを削除
+        
+        # 目立つスタイルでダウンロードボタンを表示
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.download_button(
+                label="⬇️ テキストファイルをダウンロード ⬇️",
+                data=text_content,
+                file_name=filename,
+                mime="text/plain",
+                help="クリックしてテキストファイルをダウンロード",
+                type="primary",
+                use_container_width=True
+            )
+        
+        # 少しスペースを追加
+        st.write("")
+        
+        return True
+    
+    except Exception as e:
+        logging.error(f"テキスト出力中にエラーが発生しました: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        st.error(f"テキスト出力中にエラーが発生しました: {str(e)}")
+        return False
+
 def render_main_content():
     """メインコンテンツを表示する関数"""
     
     # 必要な関数をローカルスコープにインポート（名前解決エラー回避のため）
-    from hairstyle_analyzer.ui.streamlit_app import convert_to_process_results, generate_excel_download
+    from hairstyle_analyzer.ui.streamlit_app import convert_to_process_results, generate_excel_download, generate_text_download
     
     # タイトル表示
     st.write("# Style Generator")
@@ -1107,19 +1206,33 @@ def render_main_content():
                     # 結果表示
                     display_results(results)
                     
-                    # ここからExcel出力処理を追加
+                    # ここから出力処理を追加
                     try:
                         # プロセッサーがセッションに存在することを確認
                         processor = st.session_state[SESSION_PROCESSOR]
                         
+                        # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
+                        processor.clear_results()
+                        process_results = convert_to_process_results(results)
+                        processor.results.extend(process_results)
+                        
+                        # 出力形式の選択を削除し、両方の出力を表示
+                        st.write("### 出力ファイル")
+                        
+                        # 通知メッセージを表示
+                        st.success("タイトル生成が完了しました。下のボタンをクリックしてファイルをダウンロードしてください。")
+                        
                         # Excel出力とダウンロードボタン表示
                         generate_excel_download(processor, results, "タイトル生成が完了しました。")
+                        
+                        # テキスト出力とダウンロードボタン表示
+                        generate_text_download(processor, results, "タイトル生成が完了しました。")
                     
                     except Exception as e:
-                        logging.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+                        logging.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
                         import traceback
                         logging.error(traceback.format_exc())
-                        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+                        st.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
             
             except Exception as e:
                 st.error(f"処理中にエラーが発生しました: {str(e)}")
@@ -1138,14 +1251,28 @@ def render_main_content():
                 # セッションからプロセッサーを取得
                 processor = st.session_state[SESSION_PROCESSOR]
                 
+                # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
+                processor.clear_results()
+                process_results = convert_to_process_results(results)
+                processor.results.extend(process_results)
+                
+                # 出力形式の選択を削除し、両方の出力を表示
+                st.write("### 出力ファイル")
+                
+                # 通知メッセージを表示
+                st.success("以前の処理結果からファイルを生成できます。下のボタンをクリックしてダウンロードしてください。")
+                
                 # Excel出力とダウンロードボタン表示
                 generate_excel_download(processor, results, "以前の処理結果からExcelファイルを生成できます。")
                 
+                # テキスト出力とダウンロードボタン表示
+                generate_text_download(processor, results, "以前の処理結果からテキストファイルを生成できます。")
+            
             except Exception as e:
-                logging.error(f"既存結果からのExcel出力中にエラーが発生しました: {str(e)}")
+                logging.error(f"既存結果からのファイル出力中にエラーが発生しました: {str(e)}")
                 import traceback
                 logging.error(traceback.format_exc())
-                st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+                st.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
 
 
 def get_config_manager():

@@ -32,6 +32,7 @@ from .image_analyzer import ImageAnalyzer
 from .template_matcher import TemplateMatcher
 from .style_matching import StyleMatchingService
 from .excel_exporter import ExcelExporter
+from .text_exporter import TextExporter
 
 
 class MainProcessor(MainProcessorProtocol):
@@ -48,6 +49,7 @@ class MainProcessor(MainProcessorProtocol):
         template_matcher: TemplateMatcher,
         style_matcher: StyleMatchingService,
         excel_exporter: ExcelExporter,
+        text_exporter: TextExporter,
         cache_manager: Optional[CacheManagerProtocol] = None,
         batch_size: int = 5,
         api_delay: float = 1.0,
@@ -63,6 +65,7 @@ class MainProcessor(MainProcessorProtocol):
             template_matcher: テンプレートマッチングクラス
             style_matcher: スタイルマッチングサービス
             excel_exporter: Excel出力クラス
+            text_exporter: テキスト出力クラス
             cache_manager: キャッシュマネージャー（オプション）
             batch_size: バッチサイズ
             api_delay: API呼び出し間の遅延（秒）
@@ -74,6 +77,7 @@ class MainProcessor(MainProcessorProtocol):
         self.template_matcher = template_matcher
         self.style_matcher = style_matcher
         self.excel_exporter = excel_exporter
+        self.text_exporter = text_exporter
         self.cache_manager = cache_manager
         
         # 設定パラメータ
@@ -625,6 +629,28 @@ class MainProcessor(MainProcessorProtocol):
         # Excel出力
         return self.excel_exporter.export(self.results, output_path)
     
+    def export_to_text(self, output_path: Path) -> Path:
+        """
+        処理結果をテキストファイルに出力します。
+        
+        Args:
+            output_path: 出力ファイルのパス
+            
+        Returns:
+            エクスポートされたファイルのパス
+            
+        Raises:
+            TextExportError: テキスト出力処理でエラーが発生した場合
+        """
+        self.logger.info(f"テキスト出力開始: 結果数={len(self.results)}, 出力先={output_path}")
+        
+        if not self.results:
+            self.logger.warning("出力する結果がありません")
+            raise ValidationError("出力する結果がありません")
+        
+        # テキスト出力
+        return self.text_exporter.export(self.results, output_path)
+    
     def get_excel_binary(self) -> bytes:
         """
         処理結果のExcelバイナリデータを取得します。
@@ -643,6 +669,25 @@ class MainProcessor(MainProcessorProtocol):
         
         # Excelバイナリデータの取得
         return self.excel_exporter.get_binary_data(self.results)
+    
+    def get_text_content(self) -> str:
+        """
+        処理結果のテキストデータを取得します。
+        
+        Returns:
+            テキストデータ
+            
+        Raises:
+            TextExportError: テキスト出力処理でエラーが発生した場合
+        """
+        self.logger.info(f"テキストデータ生成開始: 結果数={len(self.results)}")
+        
+        if not self.results:
+            self.logger.warning("出力する結果がありません")
+            raise ValidationError("出力する結果がありません")
+        
+        # テキストデータの取得
+        return self.text_exporter.get_text_content(self.results)
     
     def get_results(self) -> List[ProcessResultProtocol]:
         """
