@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import copy
 
 import streamlit as st
 import pandas as pd
@@ -85,6 +86,9 @@ def init_session_state():
         st.session_state[SESSION_COUPONS] = []
     if SESSION_USE_CACHE not in st.session_state:
         st.session_state[SESSION_USE_CACHE] = False
+    # ファイル名マッピングの初期化
+    if "filename_mapping" not in st.session_state:
+        st.session_state["filename_mapping"] = {}
     # APIキーのセッション変数初期化は削除
     if SESSION_SALON_URL not in st.session_state:
         st.session_state[SESSION_SALON_URL] = ""
@@ -174,7 +178,7 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 logging.info(f"画像 {image_name} の処理を開始します")
                 
                 # 処理段階の詳細情報を更新
-                stage_details = f"画像: {image_name}\n"
+                stage_details = f"処理中: 画像 {i+1}/{total}\n"
                 stage_details += f"現在の段階: {processing_stages[0]}\n"
                 stage_details += f"次の段階: {processing_stages[1]}"
                 progress["stage_details"] = stage_details
@@ -194,9 +198,8 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                     result = await processor.process_single_image(path_obj, use_cache=use_cache)
                 
                 # 処理段階の詳細情報を更新（完了）
-                stage_details = f"画像: {image_name}\n"
-                stage_details += f"完了した段階: {', '.join(processing_stages)}\n"
-                stage_details += "処理完了"
+                stage_details = f"処理完了: 画像 {i+1}/{total}\n"
+                stage_details += f"完了した段階: {', '.join(processing_stages)}"
                 progress["stage_details"] = stage_details
                 st.session_state[SESSION_PROGRESS] = progress
                 
@@ -205,9 +208,71 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 
                 # 結果にファイル名を追加
                 if result:
-                    if isinstance(result, dict) and 'image_name' not in result:
-                        result['image_name'] = image_name
-                        result['image_path'] = str(path_obj)
+                    # セッション状態からファイル名マッピングを取得
+                    filename_mapping = st.session_state.get("filename_mapping", {})
+                    
+                    # デバッグログ：マッピングの内容を確認
+                    logging.debug(f"ファイル名マッピング: {filename_mapping}")
+                    logging.debug(f"現在の画像名: {image_name}")
+                    logging.debug(f"現在のパス: {str(path_obj)}")
+                    
+                    if isinstance(result, dict):
+                        if 'image_name' not in result:
+                            # 検索キーの候補リスト
+                            search_keys = [
+                                image_name.lower(),        # ファイル名のみ（小文字）
+                                str(path_obj).lower(),     # 完全なパス（文字列、小文字）
+                                path_obj.name.lower()      # パスから抽出したファイル名（小文字）
+                            ]
+                            
+                            # 元のファイル名を検索
+                            original_filename = None
+                            for key in search_keys:
+                                if key in filename_mapping:
+                                    original_filename = filename_mapping[key]
+                                    logging.debug(f"マッピング成功: {key} -> {original_filename}")
+                                    break
+                            
+                            # マッピングが見つかった場合は元のファイル名を使用
+                            if original_filename:
+                                result['image_name'] = original_filename
+                                logging.info(f"元のファイル名を設定: {original_filename}")
+                            else:
+                                # マッピングがない場合は安全なファイル名を使用（従来の動作）
+                                result['image_name'] = image_name
+                                logging.warning(f"元のファイル名が見つからないため安全なファイル名を使用: {image_name}")
+                            
+                            result['image_path'] = str(path_obj)
+                    else:
+                        # オブジェクト型の結果の場合（ProcessResultモデルなど）
+                        try:
+                            # 検索キーの候補リスト
+                            search_keys = [
+                                image_name.lower(),        # ファイル名のみ（小文字）
+                                str(path_obj).lower(),     # 完全なパス（文字列、小文字）
+                                path_obj.name.lower()      # パスから抽出したファイル名（小文字）
+                            ]
+                            
+                            # 元のファイル名を検索
+                            original_filename = None
+                            for key in search_keys:
+                                if key in filename_mapping:
+                                    original_filename = filename_mapping[key]
+                                    logging.debug(f"オブジェクト用マッピング成功: {key} -> {original_filename}")
+                                    break
+                            
+                            # 元のファイル名が見つかった場合に属性を更新
+                            if original_filename and hasattr(result, 'image_name') and hasattr(result.__class__, 'image_name'):
+                                result.image_name = original_filename
+                                logging.info(f"オブジェクトに元のファイル名を設定: {original_filename}")
+                            
+                            # image_path属性があれば更新
+                            if hasattr(result, 'image_path') and hasattr(result.__class__, 'image_path'):
+                                result.image_path = str(path_obj)
+                        except Exception as e:
+                            # 属性の更新に失敗した場合はログに記録（処理は続行）
+                            logging.warning(f"結果オブジェクトの属性更新中にエラー: {str(e)}")
+                    
                     results.append(result)
                 
             except Exception as e:
@@ -217,8 +282,8 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 logging.error(traceback.format_exc())
                 
                 # エラー情報を進捗詳細に追加
-                stage_details = f"画像: {image_name}\n"
-                stage_details += f"エラー発生: {str(e)}\n"
+                stage_details = f"エラー発生: 画像 {i+1}/{total}\n"
+                stage_details += f"エラー: {str(e)}\n"
                 stage_details += "次の画像に進みます"
                 progress["stage_details"] = stage_details
                 st.session_state[SESSION_PROGRESS] = progress
@@ -428,7 +493,18 @@ def display_progress():
             if "stage_details" in progress:
                 with st.expander("処理の詳細を表示", expanded=False):
                     st.write("**現在の処理段階**:")
-                    st.write(progress["stage_details"])
+                    # stage_detailsの内容を表示する代わりに、必要な情報だけを抽出して表示
+                    details = progress["stage_details"]
+                    # 画像ファイル名が含まれていないか確認
+                    if "styleimg_" in details:
+                        # ファイル名を含む行は表示しない
+                        lines = details.split('\n')
+                        filtered_lines = []
+                        for line in lines:
+                            if not line.startswith("画像:") and "styleimg_" not in line:
+                                filtered_lines.append(line)
+                        details = "\n".join(filtered_lines)
+                    st.write(details)
             
             # 完了メッセージ
             if progress["complete"]:
@@ -441,11 +517,48 @@ def display_results(results):
         st.warning("表示する結果がありません。")
         return
     
+    # ファイル名マッピングを取得
+    filename_mapping = st.session_state.get("filename_mapping", {})
+    
+    # ディープコピーで結果をコピーして元のファイル名に置き換え
+    import copy
+    fixed_results = copy.deepcopy(results)
+    
+    # 各結果のファイル名を元のファイル名に置き換え
+    for result in fixed_results:
+        try:
+            # 辞書型の場合
+            if isinstance(result, dict) and 'image_name' in result:
+                current_name = result['image_name']
+                # 小文字変換して比較
+                current_name_lower = current_name.lower()
+                
+                # マッピングから元のファイル名を検索
+                if current_name_lower in filename_mapping:
+                    original_name = filename_mapping[current_name_lower]
+                    logging.info(f"ファイル名を置換: {current_name} -> {original_name}")
+                    result['image_name'] = original_name
+            
+            # オブジェクト型の場合
+            elif hasattr(result, 'image_name'):
+                current_name = result.image_name
+                # 小文字変換して比較
+                current_name_lower = current_name.lower()
+                
+                # マッピングから元のファイル名を検索
+                if current_name_lower in filename_mapping:
+                    original_name = filename_mapping[current_name_lower]
+                    logging.info(f"ファイル名を置換(obj): {current_name} -> {original_name}")
+                    result.image_name = original_name
+        
+        except Exception as e:
+            logging.error(f"ファイル名置換中にエラー: {str(e)}")
+    
     st.subheader("処理結果")
     
     # 結果データをDataFrameに変換
     data = []
-    for result in results:
+    for result in fixed_results:
         # 結果が辞書型かオブジェクト型か確認
         try:
             if isinstance(result, dict):
@@ -535,7 +648,7 @@ def display_results(results):
     st.write("### 詳細情報")
     
     # 各画像ごとにエクスパンダーを作成
-    for result in results:
+    for result in fixed_results:
         # 画像名を取得
         if isinstance(result, dict):
             image_name = result.get('image_name', '不明')
@@ -822,6 +935,9 @@ def convert_to_process_results(results):
     """結果をProcessResultオブジェクトに変換する関数"""
     from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo, StyleFeatures
     
+    # ファイル名マッピングを取得
+    filename_mapping = st.session_state.get("filename_mapping", {})
+    
     process_results = []
     for result in results:
         try:
@@ -829,6 +945,13 @@ def convert_to_process_results(results):
                 # 辞書の場合はProcessResultオブジェクトに変換
                 # 必要なオブジェクトを作成
                 image_name = result.get("image_name", "")
+                
+                # ファイル名を元のファイル名に置き換え
+                current_name_lower = image_name.lower()
+                if current_name_lower in filename_mapping:
+                    original_name = filename_mapping[current_name_lower]
+                    logging.info(f"エクスポート用ファイル名を置換: {image_name} -> {original_name}")
+                    image_name = original_name
                 
                 # StyleAnalysisの作成
                 style_analysis_dict = result.get("style_analysis", {})
@@ -896,6 +1019,15 @@ def convert_to_process_results(results):
                 process_results.append(process_result)
             else:
                 # すでにProcessResultオブジェクトの場合はそのまま追加
+                # ただし、ファイル名は元のファイル名に置き換え
+                if hasattr(result, 'image_name'):
+                    current_name = result.image_name
+                    current_name_lower = current_name.lower()
+                    if current_name_lower in filename_mapping:
+                        original_name = filename_mapping[current_name_lower]
+                        logging.info(f"オブジェクトのファイル名を置換: {current_name} -> {original_name}")
+                        result.image_name = original_name
+                
                 process_results.append(result)
         except Exception as e:
             logging.error(f"結果変換中にエラーが発生しました: {str(e)}")
@@ -1308,6 +1440,10 @@ def handle_image_upload(uploaded_files):
         
         # 画像ファイルの保存
         image_paths = []
+        
+        # ファイル名マッピングを格納する辞書
+        filename_mapping = {}
+        
         for i, file in enumerate(uploaded_files):
             try:
                 # ファイル名の取得（拡張子を含む）
@@ -1322,6 +1458,19 @@ def handle_image_upload(uploaded_files):
                 # 安全なファイル名の生成
                 safe_filename = f"styleimg_{i+1}{file_ext}"
                 temp_path = temp_dir / safe_filename
+                
+                # オリジナルファイル名と安全なファイル名のマッピングを保存
+                # 安全なファイル名をキーとする（小文字に統一）
+                filename_mapping[safe_filename.lower()] = original_filename
+                # 完全なパス（文字列）をキーとする
+                filename_mapping[str(temp_path).lower()] = original_filename
+                # 完全なパス（Pathオブジェクト）の名前部分をキーとする（念のため）
+                filename_mapping[temp_path.name.lower()] = original_filename
+                
+                # デバッグログ：マッピングの登録を確認
+                logging.debug(f"ファイル名マッピング追加: {safe_filename} -> {original_filename}")
+                logging.debug(f"パスマッピング追加: {str(temp_path)} -> {original_filename}")
+                logging.debug(f"名前マッピング追加: {temp_path.name} -> {original_filename}")
                 
                 # ファイルの保存
                 with open(temp_path, "wb") as f:
@@ -1352,6 +1501,9 @@ def handle_image_upload(uploaded_files):
                 import traceback
                 logging.error(traceback.format_exc())
                 continue
+        
+        # ファイル名マッピングをセッション状態に保存
+        st.session_state["filename_mapping"] = filename_mapping
         
         return image_paths
         
