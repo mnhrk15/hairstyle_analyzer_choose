@@ -141,10 +141,10 @@ class MainProcessor(MainProcessorProtocol):
         
         try:
             # 0. 画像読み込み段階
-            self._update_progress(0, 5, f"画像読み込み中: {image_path.name}")
+            self._update_progress(0, 5, "画像読み込み中")
             
             # 1. スタイル分析と属性分析を並列実行
-            self._update_progress(1, 5, f"スタイル分析中: {image_path.name}")
+            self._update_progress(1, 5, "スタイル分析中")
             categories = self.template_matcher.template_manager.get_all_categories()
             style_analysis, attribute_analysis = await self.image_analyzer.analyze_full(image_path, categories)
             
@@ -153,7 +153,7 @@ class MainProcessor(MainProcessorProtocol):
                 return None
             
             # 2. テンプレートマッチング
-            self._update_progress(2, 5, f"テンプレートマッチング中: {image_path.name}")
+            self._update_progress(2, 5, "テンプレートマッチング中")
             template, template_reason = await self._match_template(image_path, style_analysis)
             
             if not template:
@@ -161,16 +161,16 @@ class MainProcessor(MainProcessorProtocol):
                 return None
             
             # 3-4. スタイリストとクーポン選択
-            self._update_progress(3, 5, f"スタイリスト選択中: {image_path.name}")
+            self._update_progress(3, 5, "スタイリスト選択中")
             stylist_result = await self._select_stylist(image_path, stylists, style_analysis)
             selected_stylist, stylist_reason = stylist_result if stylist_result else (None, None)
             
-            self._update_progress(4, 5, f"クーポン選択中: {image_path.name}")
+            self._update_progress(4, 5, "クーポン選択中")
             coupon_result = await self._select_coupon(image_path, coupons, style_analysis)
             selected_coupon, coupon_reason = coupon_result if coupon_result else (None, None)
             
             # 5. 処理結果作成
-            self._update_progress(5, 5, f"タイトル生成中: {image_path.name}")
+            self._update_progress(5, 5, "タイトル生成中")
             result = self._create_process_result(
                 image_path=image_path,
                 style_analysis=style_analysis,
