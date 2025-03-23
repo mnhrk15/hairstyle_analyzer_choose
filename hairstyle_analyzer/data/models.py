@@ -73,18 +73,35 @@ class CouponInfo(BaseModel):
         frozen = True
 
 
+class TemplateCandidate(BaseModel):
+    """
+    テンプレート候補を表すモデル
+    
+    このモデルは、画像に対して選出された複数のテンプレート候補を表します。
+    各候補には、テンプレート本体、選出理由、スコア、選択状態が含まれます。
+    """
+    template: Template = Field(description="テンプレート")
+    reason: str = Field(description="選出理由")
+    score: float = Field(default=0.0, description="マッチングスコア")
+    is_selected: bool = Field(default=False, description="ユーザーによる選択状態")
+
+
 class ProcessResult(BaseModel):
     """処理結果を表すモデル"""
     image_name: str = Field(description="画像ファイル名")
+    image_path: Optional[str] = Field(default=None, description="画像ファイルパス")
     style_analysis: StyleAnalysis = Field(description="スタイル分析結果")
     attribute_analysis: AttributeAnalysis = Field(description="属性分析結果")
     selected_template: Template = Field(description="選択されたテンプレート")
-    selected_stylist: StylistInfo = Field(description="選択されたスタイリスト")
-    selected_coupon: CouponInfo = Field(description="選択されたクーポン")
+    selected_stylist: Optional[StylistInfo] = Field(default=None, description="選択されたスタイリスト")
+    selected_coupon: Optional[CouponInfo] = Field(default=None, description="選択されたクーポン")
     stylist_reason: Optional[str] = Field(default=None, description="スタイリスト選択理由")
     coupon_reason: Optional[str] = Field(default=None, description="クーポン選択理由")
     template_reason: Optional[str] = Field(default=None, description="テンプレート選択理由")
     processed_at: datetime = Field(default_factory=datetime.now, description="処理日時")
+    # 新機能: 複数テンプレート候補
+    template_candidates: List[TemplateCandidate] = Field(default_factory=list, description="テンプレート候補リスト")
+    user_selected_template: Optional[Template] = Field(default=None, description="ユーザーが選択したテンプレート")
 
 
 class CacheEntry(BaseModel):
@@ -179,6 +196,13 @@ class LoggingConfig(BaseModel):
     log_level: str = Field(default="INFO", description="ログレベル")
 
 
+class DebugConfig(BaseModel):
+    """デバッグ設定を表すモデル"""
+    enabled: bool = Field(default=False, description="デバッグモードを有効にするかどうか")
+    show_session_state: bool = Field(default=True, description="セッション状態を表示するかどうか")
+    show_workflow_state: bool = Field(default=True, description="ワークフロー状態を表示するかどうか")
+
+
 class AppConfig(BaseModel):
     """アプリケーション全体の設定を表すモデル"""
     gemini: GeminiConfig = Field(description="Gemini API設定")
@@ -189,3 +213,4 @@ class AppConfig(BaseModel):
     paths: PathsConfig = Field(description="パス設定")
     cache: CacheConfig = Field(description="キャッシュ設定")
     logging: LoggingConfig = Field(description="ロギング設定")
+    debug: DebugConfig = Field(default_factory=DebugConfig, description="デバッグ設定")

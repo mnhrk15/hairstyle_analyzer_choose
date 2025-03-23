@@ -121,7 +121,7 @@ class MainProcessor(MainProcessorProtocol):
             self.progress_callback(current, total, message)
     
     @cacheable(lambda self, image_path, *args, **kwargs: f"process_result:{image_path.name}")
-    async def process_single_image(self, image_path: Path, stylists=None, coupons=None) -> Optional[ProcessResultProtocol]:
+    async def process_single_image(self, image_path: Path, stylists=None, coupons=None, template_count: int = 3) -> Optional[ProcessResultProtocol]:
         """
         単一の画像を処理します。
         
@@ -129,6 +129,7 @@ class MainProcessor(MainProcessorProtocol):
             image_path: 画像ファイルのパス
             stylists: スタイリスト情報のリスト（オプション）
             coupons: クーポン情報のリスト（オプション）
+            template_count: 選択するテンプレート数（デフォルト: 3）
             
         Returns:
             処理結果、またはエラー時はNone
@@ -154,11 +155,22 @@ class MainProcessor(MainProcessorProtocol):
             
             # 2. テンプレートマッチング
             self._update_progress(2, 5, "テンプレートマッチング中")
+            
+            # 2.1 単一テンプレートマッチング（従来の機能）
             template, template_reason = await self._match_template(image_path, style_analysis)
             
             if not template:
                 self.logger.error(f"テンプレートマッチングに失敗しました: {image_path.name}")
                 return None
+                
+            # 2.2 複数テンプレートマッチング（新機能）
+            self.logger.info(f"複数テンプレートマッチングを実行します（候補数: {template_count}）")
+            template_candidates = await self._match_multiple_templates(image_path, style_analysis, template_count)
+            
+            if not template_candidates:
+                self.logger.warning(f"複数テンプレートマッチングに失敗しました。単一テンプレートのみを使用します: {image_path.name}")
+                # 単一テンプレートから候補リストを作成（フォールバック）
+                template_candidates = [(template, template_reason, 1.0)]
             
             # 3-4. スタイリストとクーポン選択
             self._update_progress(3, 5, "スタイリスト選択中")
@@ -180,7 +192,8 @@ class MainProcessor(MainProcessorProtocol):
                 stylist=selected_stylist,
                 stylist_reason=stylist_reason,
                 coupon=selected_coupon,
-                coupon_reason=coupon_reason
+                coupon_reason=coupon_reason,
+                template_candidates=template_candidates
             )
             
             return result
@@ -192,9 +205,17 @@ class MainProcessor(MainProcessorProtocol):
         except Exception as e:
             self.logger.error(f"予期しないエラー: {str(e)}")
             return None
-    
     async def _match_template(self, image_path: Path, style_analysis: StyleAnalysisProtocol) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """テンプレートマッチングを実行"""
+        """
+        テンプレートマッチングを実行し、最適なテンプレートを1つ選択します。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            style_analysis: スタイル分析結果
+            
+        Returns:
+            (選択されたテンプレート, 選択理由)のタプル
+        """
         # Gemini APIサービスを取得
         gemini_service = self.image_analyzer.gemini_service
         
@@ -225,6 +246,66 @@ class MainProcessor(MainProcessorProtocol):
             template_reason = "スコアリングベースのマッチングにより選択されました"
         
         return template, template_reason
+        
+    async def _match_multiple_templates(self, image_path: Path, style_analysis: StyleAnalysisProtocol, count: int = 3) -> List[Tuple[Dict[str, Any], str, float]]:
+        """
+        複数のテンプレートマッチングを実行し、最適なテンプレートを複数選択します。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            style_analysis: スタイル分析結果
+            count: 選択するテンプレート数（デフォルト: 3）
+            
+        Returns:
+            [(テンプレート, 選択理由, スコア), ...] のリスト
+        """
+        # Gemini APIサービスを取得
+        gemini_service = self.image_analyzer.gemini_service
+        
+        # 設定からAIマッチングが有効かどうかを確認
+        ai_matching_enabled = gemini_service.config.template_matching.enabled
+        fallback_on_failure = gemini_service.config.template_matching.fallback_on_failure
+        use_category_filter = gemini_service.config.template_matching.use_category_filter
+        max_templates = gemini_service.config.template_matching.max_templates
+        
+        template_candidates = []
+        
+        if ai_matching_enabled:
+            self.logger.info(f"AIベースの複数テンプレートマッチングを実行します（候補数: {count}）")
+            try:
+                template_candidates = await self.template_matcher.find_multiple_templates_with_ai(
+                    image_path=image_path,
+                    gemini_service=gemini_service,
+                    count=count,
+                    analysis=style_analysis,
+                    use_category_filter=use_category_filter,
+                    max_templates=max_templates
+                )
+                
+                if template_candidates:
+                    self.logger.info(f"AIによる複数テンプレート選択が成功しました: {len(template_candidates)}件")
+                    return [(t, r, s) for t, r, s in template_candidates]
+                    
+            except Exception as e:
+                self.logger.error(f"AIによる複数テンプレート選択中にエラーが発生しました: {str(e)}")
+        
+        # AIマッチングが失敗または無効の場合、従来のスコアリングベースのマッチングを使用
+        if not template_candidates and (fallback_on_failure or not ai_matching_enabled):
+            self.logger.info("従来のスコアリングベースの複数テンプレートマッチングを実行します")
+            
+            # 代替テンプレートを検索
+            alternative_templates = self.template_matcher.find_alternative_templates(style_analysis, count)
+            
+            # 結果を整形
+            template_candidates = []
+            for template in alternative_templates:
+                template_candidates.append((
+                    template,
+                    "スコアリングベースのマッチングにより選択されました",
+                    0.5  # デフォルトスコア
+                ))
+        
+        return template_candidates
     
     async def _select_stylist(self, image_path: Path, stylists: List[StylistInfoProtocol], style_analysis: StyleAnalysisProtocol) -> Optional[Tuple[StylistInfoProtocol, str]]:
         """スタイリスト選択を実行"""
@@ -248,8 +329,8 @@ class MainProcessor(MainProcessorProtocol):
         self.logger.info(f"クーポン選択: {selected_coupon.name if selected_coupon else 'なし'}")
         return (selected_coupon, coupon_reason) if selected_coupon else None
     
-    def _create_process_result(self, 
-                              image_path: Path, 
+    def _create_process_result(self,
+                              image_path: Path,
                               style_analysis: StyleAnalysisProtocol,
                               attribute_analysis: AttributeAnalysisProtocol,
                               template: Dict[str, Any],
@@ -257,8 +338,26 @@ class MainProcessor(MainProcessorProtocol):
                               stylist: Optional[StylistInfoProtocol] = None,
                               stylist_reason: Optional[str] = None,
                               coupon: Optional[CouponInfoProtocol] = None,
-                              coupon_reason: Optional[str] = None) -> ProcessResultProtocol:
-        """処理結果オブジェクトを作成"""
+                              coupon_reason: Optional[str] = None,
+                              template_candidates: Optional[List[Tuple[Dict[str, Any], str, float]]] = None) -> ProcessResultProtocol:
+        """
+        処理結果オブジェクトを作成します。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            style_analysis: スタイル分析結果
+            attribute_analysis: 属性分析結果
+            template: 選択されたテンプレート
+            template_reason: テンプレート選択理由
+            stylist: 選択されたスタイリスト（オプション）
+            stylist_reason: スタイリスト選択理由（オプション）
+            coupon: 選択されたクーポン（オプション）
+            coupon_reason: クーポン選択理由（オプション）
+            template_candidates: テンプレート候補リスト（オプション）
+            
+        Returns:
+            処理結果オブジェクト
+        """
         from ..data.models import StyleAnalysis, StyleFeatures, AttributeAnalysis, Template, StylistInfo, CouponInfo
         
         # スタイル分析モデルの作成
@@ -315,9 +414,43 @@ class MainProcessor(MainProcessorProtocol):
                 conditions=getattr(coupon, 'conditions', {})
             )
         
+        # テンプレート候補モデルの作成
+        template_candidate_models = []
+        if template_candidates:
+            from ..data.models import TemplateCandidate
+            
+            for candidate_template, reason, score in template_candidates:
+                # 候補テンプレートの変換
+                if isinstance(candidate_template, Template):
+                    candidate_model = candidate_template
+                else:
+                    # 辞書型の場合
+                    candidate_model = Template(
+                        category=candidate_template.get('category', ''),
+                        title=candidate_template.get('title', ''),
+                        menu=candidate_template.get('menu', ''),
+                        comment=candidate_template.get('comment', ''),
+                        hashtag=candidate_template.get('hashtag', '')
+                    )
+                
+                # 候補モデルの作成
+                template_candidate = TemplateCandidate(
+                    template=candidate_model,
+                    reason=reason,
+                    score=score,
+                    is_selected=False  # 初期状態では選択されていない
+                )
+                
+                template_candidate_models.append(template_candidate)
+            
+            # 最初の候補を選択状態にする（デフォルト）
+            if template_candidate_models:
+                template_candidate_models[0].is_selected = True
+        
         # ProcessResultモデルの作成
         return ProcessResult(
             image_name=image_path.name,
+            image_path=str(image_path),
             style_analysis=style_analysis_model,
             attribute_analysis=attribute_analysis_model,
             selected_template=template_model,
@@ -326,7 +459,10 @@ class MainProcessor(MainProcessorProtocol):
             stylist_reason=stylist_reason,
             coupon_reason=coupon_reason,
             template_reason=template_reason,
-            processed_at=datetime.now()
+            processed_at=datetime.now(),
+            # 新機能: 複数テンプレート候補
+            template_candidates=template_candidate_models,
+            user_selected_template=None  # 初期状態ではユーザー選択なし
         )
     
     async def process_images(self, image_paths: List[Path], use_cache: Optional[bool] = None) -> List[ProcessResultProtocol]:

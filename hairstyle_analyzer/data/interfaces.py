@@ -231,16 +231,30 @@ class GeminiServiceProtocol(Protocol):
         ...
 
 
+# テンプレート候補のインターフェース
+class TemplateCandidateProtocol(Protocol):
+    """テンプレート候補のインターフェース"""
+    template: TemplateProtocol
+    reason: str
+    score: float
+    is_selected: bool
+
 # 処理結果のインターフェース
 class ProcessResultProtocol(Protocol):
     """処理結果のインターフェース"""
     image_name: str
+    image_path: Optional[str]
     style_analysis: StyleAnalysisProtocol
     attribute_analysis: AttributeAnalysisProtocol
     selected_template: TemplateProtocol
-    selected_stylist: StylistInfoProtocol
-    selected_coupon: CouponInfoProtocol
+    selected_stylist: Optional[StylistInfoProtocol]
+    selected_coupon: Optional[CouponInfoProtocol]
+    stylist_reason: Optional[str]
+    coupon_reason: Optional[str]
+    template_reason: Optional[str]
     processed_at: datetime
+    template_candidates: List[TemplateCandidateProtocol]
+    user_selected_template: Optional[TemplateProtocol]
 
 
 # メインプロセッサのインターフェース

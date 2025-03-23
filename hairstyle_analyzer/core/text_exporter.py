@@ -7,7 +7,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
 from ..data.models import ProcessResult, TextConfig
@@ -53,9 +53,9 @@ class TextExporter(TextExporterProtocol):
         self.config = config
     
     @with_error_handling(TextExportError, "テキスト出力処理でエラーが発生しました")
-    def export(self, results: List[ProcessResultProtocol], output_path: Path) -> Path:
+    def export(self, results: List[ProcessResultProtocol], output_path: Union[str, Path]) -> Path:
         """
-        処理結果をテキスト形式でエクスポートします。
+        処理結果をテキストファイルに出力します。
         
         Args:
             results: 処理結果のリスト
@@ -68,6 +68,10 @@ class TextExporter(TextExporterProtocol):
             TextExportError: テキスト出力処理でエラーが発生した場合
         """
         self.logger.info(f"テキスト出力開始: 結果数={len(results)}, 出力先={output_path}")
+        
+        # 文字列パスをPathオブジェクトに変換
+        if isinstance(output_path, str):
+            output_path = Path(output_path)
         
         # 出力ディレクトリが存在しない場合は作成
         output_path.parent.mkdir(parents=True, exist_ok=True)

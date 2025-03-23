@@ -1017,6 +1017,141 @@ class GeminiService:
         self.logger.info(f"AIがテンプレートを選択しました: ID={template_id}")
         return template_id, reason
     
+    @async_with_error_handling(GeminiAPIError, "複数テンプレート選択に失敗しました")
+    async def select_multiple_templates(
+        self,
+        image_path: Path,
+        templates: List[Template],
+        count: int = 3,
+        analysis: Optional[StyleAnalysisProtocol] = None,
+        category_filter: bool = False
+    ) -> List[Tuple[int, str, float]]:
+        """
+        画像に最適な複数のテンプレートを選択します。
+        
+        このメソッドは、Gemini APIを使用して画像に最も適した複数のテンプレートを選択します。
+        画像分析結果が提供されている場合は、その情報も考慮されます。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            templates: テンプレートリスト
+            count: 選択するテンプレート数（デフォルト: 3）
+            analysis: 画像分析結果（オプション）
+            category_filter: カテゴリでフィルタするかどうか
+            
+        Returns:
+            [(テンプレートインデックス, 選択理由, スコア), ...] のリスト
+            
+        Raises:
+            GeminiAPIError: API呼び出しに失敗した場合
+            ValueError: テンプレートリストが空の場合、または無効なパラメータが指定された場合
+            GeminiAPIError: テンプレート選択に失敗した場合
+        """
+        # テンプレートリストの検証
+        if not templates:
+            raise ValueError("テンプレートリストが空です")
+            
+        if count < 1:
+            raise ValueError("選択するテンプレート数は1以上である必要があります")
+            
+        if count > len(templates):
+            self.logger.warning(f"要求されたテンプレート数({count})が利用可能なテンプレート数({len(templates)})を超えています。利用可能な全てのテンプレートを返します。")
+            count = len(templates)
+        
+        self.logger.info(f"複数テンプレート選択開始: 画像={image_path.name}, 候補数={count}")
+        
+        # 分析結果の情報をフォーマット
+        analysis_info = ""
+        if analysis:
+            analysis_info = f"""
+カテゴリ: {analysis.category}
+特徴:
+- 髪色: {analysis.features.color}
+- カット技法: {analysis.features.cut_technique}
+- スタイリング: {analysis.features.styling}
+- 印象: {analysis.features.impression}
+キーワード: {', '.join(analysis.keywords)}
+"""
+
+        # テンプレートリストのフォーマット
+        templates_text = self._format_templates_for_matching(templates)
+        
+        # プロンプトの作成
+        prompt = f"""
+この画像のヘアスタイルに最も適したテンプレートを{count}つ選んでください。
+
+## 画像分析結果
+{analysis_info}
+
+## 利用可能なテンプレート
+{templates_text}
+
+## 指示
+1. 画像のヘアスタイルに最も適したテンプレートを{count}つ選んでください。
+2. それぞれのテンプレートについて、選んだ理由を簡潔に説明してください。
+3. 各テンプレートに0.0〜1.0のスコアを付けてください（1.0が最も適合）。
+4. 以下のJSON形式で回答してください。
+
+```json
+{{
+  "selected_templates": [
+    {{
+      "template_id": テンプレートID（0から始まる整数）,
+      "reason": "選択理由",
+      "score": スコア（0.0〜1.0の小数）
+    }},
+    ...
+  ]
+}}
+```
+"""
+
+        # Gemini APIを呼び出し
+        response = await self._call_gemini_api(prompt, image_path)
+        
+        # レスポンスからJSONデータを抽出
+        data = self._parse_json_response(response)
+        
+        if not data or "selected_templates" not in data:
+            raise GeminiAPIError("APIレスポンスから選択テンプレート情報を抽出できませんでした")
+            
+        selected_templates = data["selected_templates"]
+        
+        # 結果を整形
+        results = []
+        for template_info in selected_templates:
+            template_id = template_info.get("template_id", 0)
+            reason = template_info.get("reason", "理由が指定されていません")
+            score = template_info.get("score", 0.5)
+            
+            # テンプレートIDの範囲チェック
+            if not isinstance(template_id, int) or template_id < 0 or template_id >= len(templates):
+                # 数値に変換を試みる
+                if isinstance(template_id, str) and template_id.isdigit():
+                    template_id = int(template_id)
+                    if 0 <= template_id < len(templates):
+                        self.logger.info(f"文字列から数値に変換しました: {template_id}")
+                    else:
+                        self.logger.warning(f"無効なテンプレートID: {template_id}、スキップします")
+                        continue
+                else:
+                    self.logger.warning(f"無効なテンプレートID: {template_id}、スキップします")
+                    continue
+                    
+            results.append((template_id, reason, score))
+        
+        # スコアの降順でソート
+        results.sort(key=lambda x: x[2], reverse=True)
+        
+        # 要求された数に制限
+        results = results[:count]
+        
+        if not results:
+            raise GeminiAPIError("有効なテンプレート選択結果がありません")
+            
+        self.logger.info(f"複数テンプレート選択完了: {len(results)}件のテンプレートを選択")
+        return results
+    
     def _format_templates_for_matching(self, templates: List[Template]) -> str:
         """
         テンプレートリストをAIマッチング用にフォーマットします。

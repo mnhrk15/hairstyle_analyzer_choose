@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from .models import (
     AppConfig, GeminiConfig, ScraperConfig, ExcelConfig,
-    ProcessingConfig, PathsConfig, CacheConfig, LoggingConfig, TextConfig
+    ProcessingConfig, PathsConfig, CacheConfig, LoggingConfig, TextConfig, DebugConfig
 )
 
 
@@ -312,8 +312,13 @@ class ConfigManager:
     
     @property
     def logging(self) -> LoggingConfig:
-        """ロギング設定モデルを取得"""
+        """ロギング設定を取得する"""
         return self._app_config.logging
+    
+    @property
+    def debug(self) -> DebugConfig:
+        """デバッグ設定を取得する"""
+        return self._app_config.debug
     
     def get_all_categories(self) -> List[str]:
         """
