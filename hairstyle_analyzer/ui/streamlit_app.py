@@ -687,38 +687,28 @@ def display_template_selection(results):
                 
                 processor.results.extend(process_results)
                 
-                # 出力パスの確認
-                config_manager = st.session_state[SESSION_CONFIG]
-                excel_path = config_manager.paths.output_excel
-                text_path = config_manager.paths.output_excel.with_suffix('.txt')
+                # ダウンロード可能なファイルを生成
+                st.write("## 出力ファイルのダウンロード")
+                st.write("選択したテンプレートを反映したファイルがダウンロードできます。")
                 
-                # 出力ディレクトリが存在することを確認
-                excel_path.parent.mkdir(parents=True, exist_ok=True)
+                # 個別のtryブロックで各出力を試みる
+                col1, col2 = st.columns(2)
                 
-                logging.info(f"出力パス確認 - Excel: {excel_path}, Text: {text_path}")
+                with col1:
+                    try:
+                        excel_success = generate_excel_download(processor, results, "Excelファイルのダウンロード")
+                        logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
+                    except Exception as excel_err:
+                        logging.error(f"Excel出力エラー: {str(excel_err)}")
+                        st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
                 
-                # 出力ファイルの生成
-                st.write("### 出力ファイル")
-                success_message = "選択したテンプレートで出力ファイルを生成しました。"
-                
-                # 個別のtryブロックで各出力を試みる（rerunを削除し、UIに直接表示）
-                try:
-                    excel_success = generate_excel_download(processor, results, success_message)
-                    logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
-                except Exception as excel_err:
-                    logging.error(f"Excel出力エラー: {str(excel_err)}")
-                    st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
-                
-                try:
-                    text_success = generate_text_download(processor, results, success_message)
-                    logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
-                except Exception as text_err:
-                    logging.error(f"テキスト出力エラー: {str(text_err)}")
-                    st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
-                    
-                # 結果の表示も行う
-                st.subheader("詳細な分析結果")
-                display_results(results)
+                with col2:
+                    try:
+                        text_success = generate_text_download(processor, results, "テキストファイルのダウンロード")
+                        logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
+                    except Exception as text_err:
+                        logging.error(f"テキスト出力エラー: {str(text_err)}")
+                        st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
             else:
                 logging.error("プロセッサーがセッションにありません")
                 st.error("処理エンジンがセッションにありません。アプリを再読み込みしてください。")
@@ -728,7 +718,8 @@ def display_template_selection(results):
             logging.error(traceback.format_exc())
             st.error(f"出力ファイル生成中にエラーが発生しました: {str(e)}")
         
-        # st.rerun()は削除 - ダウンロードボタンが表示されるようにする
+        # 状態変更を確実に反映させるためrerun
+        st.rerun()
 
 def display_results(results):
     """処理結果を表示する関数"""
@@ -1265,54 +1256,23 @@ def generate_excel_download(processor, results, title="タイトル生成が完�
         title: ダウンロードボタンのタイトル
     """
     try:
-        # 出力パスの取得
-        config_manager = st.session_state[SESSION_CONFIG]
-        output_path = config_manager.paths.output_excel
-        
-        # 出力ディレクトリの確認と作成
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Pathオブジェクトを渡す（文字列変換しない）
-        processor.export_to_excel(output_path)
-        logging.info(f"Excel出力完了: {output_path}")
-        
-        # ファイルが本当に存在するか確認
-        if not output_path.exists():
-            raise FileNotFoundError(f"ファイルが生成されませんでした: {output_path}")
-        
-        # ファイルサイズを確認
-        file_size = output_path.stat().st_size
-        logging.info(f"Excelファイルサイズ: {file_size} バイト")
-        
-        if file_size == 0:
-            raise ValueError(f"生成されたファイルが空です: {output_path}")
-        
-        # ファイルの読み込み
-        with open(output_path, "rb") as f:
-            excel_data = f.read()
+        # メモリにExcelファイルを直接生成
+        logging.info("Excelデータをメモリに生成します")
+        excel_data = processor.get_excel_binary()
         
         # ダウンロードボタンの表示
-        st.write("#### Excelファイルのダウンロード")
+        st.subheader("Excelファイルのダウンロード")
         download_filename = f"HairStyle_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
-        # ダウンロードボタンとメッセージを横に表示
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            # 明確に目立つようにボタンを表示
-            download_button = st.download_button(
-                label="Excelファイルをダウンロード",
-                data=excel_data,
-                file_name=download_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_excel_button",
-                type="primary"  # プライマリボタンとして強調表示
-            )
-            # ダウンロードボタンのクリック状態をログに出力
-            if download_button:
-                logging.info("Excelダウンロードボタンがクリックされました")
+        st.download_button(
+            label="Excelファイルをダウンロード",
+            data=excel_data,
+            file_name=download_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_excel_button"
+        )
         
-        with col2:
-            st.success(f"Excelファイルが生成されました: {output_path}")
+        st.success(f"Excelファイルの生成が完了しました。上のボタンからダウンロードしてください。")
         
         return True
     
@@ -1333,55 +1293,26 @@ def generate_text_download(processor, results, title="タイトル生成が完�
         title: ダウンロードボタンのタイトル
     """
     try:
-        # 出力パスの取得（Excelパスをベースにテキストファイルのパスを生成）
-        config_manager = st.session_state[SESSION_CONFIG]
-        output_base = config_manager.paths.output_excel
-        output_path = output_base.with_suffix('.txt')
+        # メモリにテキストデータを直接生成
+        logging.info("テキストデータをメモリに生成します")
+        text_content = processor.get_text_content()
         
-        # 出力ディレクトリの確認と作成
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Pathオブジェクトを渡す（文字列変換しない）
-        processor.export_to_text(output_path)
-        logging.info(f"テキスト出力完了: {output_path}")
-        
-        # ファイルが本当に存在するか確認
-        if not output_path.exists():
-            raise FileNotFoundError(f"ファイルが生成されませんでした: {output_path}")
-            
-        # ファイルサイズを確認
-        file_size = output_path.stat().st_size
-        logging.info(f"テキストファイルサイズ: {file_size} バイト")
-        
-        if file_size == 0:
-            raise ValueError(f"生成されたファイルが空です: {output_path}")
-        
-        # ファイルの読み込み
-        with open(output_path, "rb") as f:
-            text_data = f.read()
+        # テキストをUTF-8でエンコード
+        text_data = text_content.encode('utf-8')
         
         # ダウンロードボタンの表示
-        st.write("#### テキストファイルのダウンロード")
+        st.subheader("テキストファイルのダウンロード")
         download_filename = f"HairStyle_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         
-        # ダウンロードボタンとメッセージを横に表示
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            # 明確に目立つようにボタンを表示
-            download_button = st.download_button(
-                label="テキストファイルをダウンロード",
-                data=text_data,
-                file_name=download_filename,
-                mime="text/plain",
-                key="download_text_button",
-                type="primary"  # プライマリボタンとして強調表示
-            )
-            # ダウンロードボタンのクリック状態をログに出力
-            if download_button:
-                logging.info("テキストダウンロードボタンがクリックされました")
+        st.download_button(
+            label="テキストファイルをダウンロード",
+            data=text_data,
+            file_name=download_filename,
+            mime="text/plain",
+            key="download_text_button"
+        )
         
-        with col2:
-            st.success(f"テキストファイルが生成されました: {output_path}")
+        st.success(f"テキストファイルの生成が完了しました。上のボタンからダウンロードしてください。")
         
         return True
     
@@ -1420,23 +1351,50 @@ def render_main_content():
     
     # ワークフロー状態に基づいた表示制御
     if workflow_state == "output_ready" and "templates_selected" in st.session_state and st.session_state["templates_selected"]:
-        # 出力準備完了状態：テンプレート選択と詳細結果表示は既に完了している
+        # 出力準備完了状態：テンプレート選択画面と詳細結果表示
         if SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS]:
             results = st.session_state[SESSION_RESULTS]
             
-            # 出力画面が表示されていることを確認
-            if not st.session_state.get("output_displayed", False):
-                # 出力ファイルの生成（この部分は既にdisplay_template_selectionで実行されている）
-                # ここではUIの表示のみを行う
-                st.subheader("詳細な分析結果")
-                display_results(results)
+            # テンプレート選択の表示（編集モードへのリンク表示）
+            st.subheader("スタイルテンプレート選択")
+            st.info("テンプレート選択は完了しています。再度選択する場合は「テンプレートを再選択する」ボタンをクリックしてください。")
+            
+            if st.button("テンプレートを再選択する", key="reselect_template"):
+                # 編集モードに戻す
+                st.session_state["workflow_state"] = "processing_complete"
+                st.session_state["templates_selected"] = False
+                st.rerun()
+            
+            # 詳細結果の表示
+            st.subheader("詳細な分析結果")
+            display_results(results)
+            
+            # 出力ファイルのダウンロードボタンを表示
+            st.write("## 出力ファイルのダウンロード")
+            st.write("選択したテンプレートを反映したファイルがダウンロードできます。")
+            
+            if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
+                processor = st.session_state[SESSION_PROCESSOR]
                 
-                # 出力表示済みフラグをセット
-                st.session_state["output_displayed"] = True
-            else:
-                # 既に表示されている場合は結果のみ表示
-                st.subheader("詳細な分析結果")
-                display_results(results)
+                # 個別のtryブロックで各出力を試みる
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    try:
+                        excel_success = generate_excel_download(processor, results, "Excelファイルのダウンロード")
+                        logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
+                    except Exception as excel_err:
+                        logging.error(f"Excel出力エラー: {str(excel_err)}")
+                        st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
+                
+                with col2:
+                    try:
+                        text_success = generate_text_download(processor, results, "テキストファイルのダウンロード")
+                        logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
+                    except Exception as text_err:
+                        logging.error(f"テキスト出力エラー: {str(text_err)}")
+                        st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
+            
         else:
             st.error("セッション状態に結果が見つかりません。アプリケーションを再読み込みしてください。")
             # ワークフロー状態をリセット
@@ -1448,11 +1406,6 @@ def render_main_content():
         # 処理完了状態：テンプレート選択画面のみ表示（詳細結果は選択確定後に表示）
         if SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS]:
             results = st.session_state[SESSION_RESULTS]
-            
-            # 出力表示フラグをリセット
-            if "output_displayed" in st.session_state:
-                del st.session_state["output_displayed"]
-                
             display_template_selection(results)
         else:
             st.error("セッション状態に結果が見つかりません。アプリケーションを再読み込みしてください。")
