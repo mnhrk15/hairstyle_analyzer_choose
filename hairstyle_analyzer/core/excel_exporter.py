@@ -9,7 +9,7 @@ import os
 import logging
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Any, Optional, BinaryIO
+from typing import List, Dict, Any, Optional, BinaryIO, Union
 from datetime import datetime
 
 import openpyxl
@@ -41,9 +41,9 @@ class ExcelExporter(ExcelExporterProtocol):
         self.config = config
     
     @with_error_handling(ExcelExportError, "Excel出力処理でエラーが発生しました")
-    def export(self, results: List[ProcessResultProtocol], output_path: Path) -> Path:
+    def export(self, results: List[ProcessResultProtocol], output_path: Union[str, Path]) -> Path:
         """
-        処理結果をExcel形式でエクスポートします。
+        処理結果をExcelファイルに出力します。
         
         Args:
             results: 処理結果のリスト
@@ -56,6 +56,10 @@ class ExcelExporter(ExcelExporterProtocol):
             ExcelExportError: Excel出力処理でエラーが発生した場合
         """
         self.logger.info(f"Excel出力開始: 結果数={len(results)}, 出力先={output_path}")
+        
+        # 文字列パスをPathオブジェクトに変換
+        if isinstance(output_path, str):
+            output_path = Path(output_path)
         
         # 出力ディレクトリが存在しない場合は作成
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,8 +199,10 @@ class ExcelExporter(ExcelExporterProtocol):
                     coupon = result.get('selected_coupon', {})
                     sheet[f"B{i}"] = coupon.get('name', '') if isinstance(coupon, dict) else getattr(coupon, 'name', '')
                     
+                    # ユーザーが選択したテンプレートがある場合はそれを使用
+                    template = result.get('user_selected_template', result.get('selected_template', {}))
+                    
                     # C列: コメント
-                    template = result.get('selected_template', {})
                     sheet[f"C{i}"] = template.get('comment', '') if isinstance(template, dict) else getattr(template, 'comment', '')
                     
                     # D列: スタイルタイトル
@@ -209,11 +215,14 @@ class ExcelExporter(ExcelExporterProtocol):
                     # B列: クーポン名
                     sheet[f"B{i}"] = getattr(result.selected_coupon, 'name', '')
                     
+                    # ユーザーが選択したテンプレートがある場合はそれを使用
+                    template_to_use = result.user_selected_template if hasattr(result, 'user_selected_template') and result.user_selected_template else result.selected_template
+                    
                     # C列: コメント
-                    sheet[f"C{i}"] = getattr(result.selected_template, 'comment', '')
+                    sheet[f"C{i}"] = getattr(template_to_use, 'comment', '')
                     
                     # D列: スタイルタイトル
-                    sheet[f"D{i}"] = getattr(result.selected_template, 'title', '')
+                    sheet[f"D{i}"] = getattr(template_to_use, 'title', '')
             except Exception as e:
                 self.logger.error(f"Excelデータ追加エラー (行 {i}): {e}")
                 # エラーが発生しても続行するために空の値を設定

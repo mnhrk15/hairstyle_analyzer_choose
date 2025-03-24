@@ -249,12 +249,23 @@ def mock_gemini_service():
     # GeminiServiceのモック
     mock_service = AsyncMock()
     mock_service.config = config
-    
     # select_best_templateメソッドのモック
     async def mock_select_best_template(image_path, templates, analysis=None, category_filter=False):
         # 成功時は最初のテンプレートのインデックスと理由を返す
         return 0, "AIによる選択理由"
     
+    mock_service.select_best_template.side_effect = mock_select_best_template
+    
+    # select_multiple_templatesメソッドのモック
+    async def mock_select_multiple_templates(image_path, templates, count=3, analysis=None, category_filter=False):
+        # 成功時は複数のテンプレートインデックス、理由、スコアのリストを返す
+        return [
+            (0, "第1候補の理由", 0.9),
+            (1, "第2候補の理由", 0.8),
+            (2, "第3候補の理由", 0.7)
+        ][:min(count, len(templates))]
+    
+    mock_service.select_multiple_templates.side_effect = mock_select_multiple_templates
     mock_service.select_best_template.side_effect = mock_select_best_template
     
     return mock_service
@@ -333,7 +344,6 @@ async def test_find_best_template_with_ai_failure(template_matcher, mock_gemini_
     assert "エラー" in reason
     assert success is False
 
-
 @pytest.mark.asyncio
 async def test_find_best_template_with_ai_no_templates(template_matcher, mock_gemini_service, mock_template_manager):
     """find_best_template_with_aiメソッドのテンプレートがない場合のテスト"""
@@ -353,70 +363,140 @@ async def test_find_best_template_with_ai_no_templates(template_matcher, mock_ge
     image_path = Path("dummy.jpg")
     
     # テンプレートマネージャーが空のリストを返すようにモック
-    mock_template_manager.get_templates_by_category.return_value = []
-    mock_template_manager.get_all_templates.return_value = []
+    empty_template_manager = MagicMock()
+    empty_template_manager.get_templates_by_category.return_value = []
+    empty_template_manager.get_all_templates.return_value = []
+    empty_template_manager.get_all_categories.return_value = ["テストカテゴリ1"]
     
-    # AIによるテンプレート選択を実行
-    template, reason, success = await template_matcher.find_best_template_with_ai(
-        image_path=image_path,
-        gemini_service=mock_gemini_service,
-        analysis=analysis,
-        use_category_filter=True,
-        max_templates=10
-    )
+    # template_matcherのtemplate_manager属性を一時的に置き換え
+    original_template_manager = template_matcher.template_manager
+    template_matcher.template_manager = empty_template_manager
     
-    # 結果が正しいことを確認
+    try:
+        # AIによるテンプレート選択を実行
+        template, reason, success = await template_matcher.find_best_template_with_ai(
+            image_path=image_path,
+            gemini_service=mock_gemini_service,
+            analysis=analysis,
+            use_category_filter=True,
+            max_templates=10
+        )
+        
+        # 結果が正しいことを確認
+        assert template is None
+        assert "テンプレートが見つかりません" in reason
+        assert success is False
+    finally:
+        # テスト後に元のtemplate_managerを復元
+        template_matcher.template_manager = original_template_manager
     assert template is None
     assert "見つかりません" in reason
     assert success is False
 
 
-def test_sample_templates(template_matcher, mock_template_manager):
-    """_sample_templatesメソッドのテスト"""
+@pytest.mark.asyncio
+async def test_find_multiple_templates_with_ai(template_matcher, mock_gemini_service):
+    """find_multiple_templates_with_aiメソッドのテスト"""
+    # テスト用の分析結果
+    analysis = StyleAnalysis(
+        category="テストカテゴリ1",
+        features=StyleFeatures(
+            color="テスト色",
+            cut_technique="テストカット",
+            styling="テストスタイリング",
+            impression="テスト印象"
+        ),
+        keywords=["キーワード1", "テスト"]
+    )
+    
+    # テスト用の画像パス
+    image_path = Path("dummy.jpg")
+    
     # テスト用のテンプレート
     templates = [
         Template(
-            category="カテゴリA",
-            title=f"タイトルA{i}",
-            menu=f"メニューA{i}",
-            comment=f"コメントA{i}",
-            hashtag=f"タグA{i}"
+            category="テストカテゴリ1",
+            title=f"テストタイトル{i}",
+            menu=f"テストメニュー{i}",
+            comment=f"テストコメント{i}",
+            hashtag=f"テストタグ{i}"
         )
-        for i in range(10)
-    ] + [
-        Template(
-            category="カテゴリB",
-            title=f"タイトルB{i}",
-            menu=f"メニューB{i}",
-            comment=f"コメントB{i}",
-            hashtag=f"タグB{i}"
-        )
-        for i in range(10)
+        for i in range(5)
     ]
     
-    # テンプレート数が上限以下の場合
-    result = template_matcher._sample_templates(templates[:5], 10)
-    assert len(result) == 5  # 全てのテンプレートが返される
+    # テンプレートマネージャーが複数のテンプレートを返すようにモック
+    mock_template_manager = MagicMock()
+    mock_template_manager.get_templates_by_category.return_value = templates
+    mock_template_manager.get_all_templates.return_value = templates
+    mock_template_manager.get_all_categories.return_value = ["テストカテゴリ1"]
     
-    # テンプレート数が上限を超える場合
-    result = template_matcher._sample_templates(templates, 10)
-    assert len(result) == 10  # 上限数のテンプレートが返される
+    # template_matcherのtemplate_manager属性を一時的に置き換え
+    original_template_manager = template_matcher.template_manager
+    template_matcher.template_manager = mock_template_manager
     
-    # カテゴリごとのサンプリングが行われていることを確認
-    categories = set(t.category for t in result)
-    assert len(categories) <= 2  # 最大2つのカテゴリ
-    
-    # 極端に多いカテゴリ数の場合（ランダムサンプリングが使用される）
-    many_categories = [
-        Template(
-            category=f"カテゴリ{i}",
-            title=f"タイトル{i}",
-            menu=f"メニュー{i}",
-            comment=f"コメント{i}",
-            hashtag=f"タグ{i}"
+    try:
+        # AIによる複数テンプレート選択を実行
+        results = await template_matcher.find_multiple_templates_with_ai(
+            image_path=image_path,
+            gemini_service=mock_gemini_service,
+            count=3,
+            analysis=analysis,
+            use_category_filter=True
         )
-        for i in range(30)
-    ]
+        
+        # GeminiServiceが正しく呼ばれたことを確認
+        mock_gemini_service.select_multiple_templates.assert_called_once()
+        
+        # 結果が正しいことを確認
+        assert len(results) == 3
+        
+        # 各結果がテンプレート、理由、スコアのタプルであることを確認
+        for template, reason, score in results:
+            assert isinstance(template, Template)
+            assert isinstance(reason, str)
+            assert isinstance(score, float)
+        
+        # 最初の結果が最高スコアを持つことを確認
+        assert results[0][2] > results[1][2]
+        assert results[1][2] > results[2][2]
+    finally:
+        # テスト後に元のtemplate_managerを復元
+        template_matcher.template_manager = original_template_manager
+
+
+@pytest.mark.asyncio
+async def test_find_multiple_templates_with_ai_failure(template_matcher, mock_gemini_service):
+    """find_multiple_templates_with_aiメソッドの失敗時のテスト"""
+    # テスト用の分析結果
+    analysis = StyleAnalysis(
+        category="テストカテゴリ1",
+        features=StyleFeatures(
+            color="テスト色",
+            cut_technique="テストカット",
+            styling="テストスタイリング",
+            impression="テスト印象"
+        ),
+        keywords=["キーワード1", "テスト"]
+    )
     
-    result = template_matcher._sample_templates(many_categories, 10)
-    assert len(result) == 10  # 上限数のテンプレートが返される
+    # テスト用の画像パス
+    image_path = Path("dummy.jpg")
+    
+    # GeminiServiceのselect_multiple_templatesメソッドが失敗するようにモック
+    mock_gemini_service.select_multiple_templates.side_effect = Exception("テストエラー")
+    
+    # AIによる複数テンプレート選択を実行（例外が発生することを期待）
+    with pytest.raises(TemplateError) as excinfo:
+        await template_matcher.find_multiple_templates_with_ai(
+            image_path=image_path,
+            gemini_service=mock_gemini_service,
+            count=3,
+            analysis=analysis,
+            use_category_filter=True
+        )
+    
+    # エラーメッセージに「テストエラー」が含まれていることを確認
+    assert "テストエラー" in str(excinfo.value)
+
+
+# _sample_templatesメソッドは存在しないため、このテストケースは削除します

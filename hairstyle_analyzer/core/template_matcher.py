@@ -274,3 +274,114 @@ class TemplateMatcher:
             # その他の予期しないエラー
             self.logger.error(f"AIによるテンプレート選択中に予期しないエラーが発生しました: {str(e)}")
             return None, f"予期しないエラー: {str(e)}", False
+            
+    async def find_multiple_templates_with_ai(
+        self,
+        image_path: Path,
+        gemini_service: GeminiService,
+        count: int = 3,
+        analysis: Optional[StyleAnalysisProtocol] = None,
+        use_category_filter: bool = True,
+        max_templates: int = 50
+    ) -> List[Tuple[Template, str, float]]:
+        """
+        Gemini AIを使って複数の最適なテンプレートを選択します。
+        
+        このメソッドは、画像に最も適した複数のテンプレートを選択します。
+        画像分析結果が提供されている場合は、その情報も考慮されます。
+        
+        Args:
+            image_path: 画像ファイルのパス
+            gemini_service: Gemini APIサービスインスタンス
+            count: 選択するテンプレート数（デフォルト: 3）
+            analysis: 画像分析結果（オプション、指定がない場合はAI選択のみで実行）
+            use_category_filter: カテゴリでテンプレートをフィルタするかどうか
+            max_templates: AIに送信する最大テンプレート数
+            
+        Returns:
+            [(テンプレート, 選択理由, スコア), ...] のリスト
+            
+        Raises:
+            TemplateError: テンプレート処理中にエラーが発生した場合
+        """
+        self.logger.info(f"AIによる複数テンプレート選択開始: 画像={image_path.name}, 候補数={count}")
+        
+        # 利用可能なすべてのカテゴリを取得
+        available_categories = self.template_manager.get_all_categories()
+        
+        # 最適なカテゴリの決定
+        selected_category = None
+        
+        if analysis and use_category_filter:
+            # 既存の分析結果からカテゴリを取得
+            selected_category = analysis.category
+            self.logger.info(f"分析結果から取得したカテゴリ: {selected_category}")
+        
+        # カテゴリが不明または利用可能なカテゴリに含まれていない場合、AIに選んでもらう
+        if not selected_category or selected_category not in available_categories:
+            try:
+                selected_category = await gemini_service.get_matching_category(image_path, available_categories)
+                self.logger.info(f"AIが選択したカテゴリ: {selected_category}")
+            except Exception as e:
+                self.logger.error(f"カテゴリ選択中にエラーが発生しました: {str(e)}")
+                
+                # エラー時はデフォルトカテゴリまたは最初のカテゴリを使用
+                if available_categories:
+                    selected_category = available_categories[0]
+                    self.logger.warning(f"エラーによりデフォルトカテゴリを使用します: {selected_category}")
+                else:
+                    self.logger.error("利用可能なカテゴリがありません")
+                    return []
+        
+        # 選択されたカテゴリのテンプレートを取得
+        templates = self.template_manager.get_templates_by_category(selected_category)
+        self.logger.info(f"カテゴリ '{selected_category}' で検索: {len(templates)}件のテンプレート")
+        
+        # カテゴリに一致するテンプレートがない場合は全テンプレートを使用
+        if not templates:
+            self.logger.warning(f"カテゴリ '{selected_category}' に一致するテンプレートがありません。全テンプレートを使用します。")
+            templates = self.template_manager.get_all_templates()
+            self.logger.info(f"全テンプレートを使用: {len(templates)}件")
+        
+        if not templates:
+            self.logger.error("テンプレートが見つかりません")
+            return []
+        
+        # GeminiServiceを使用して複数テンプレート選択
+        try:
+            template_results = await gemini_service.select_multiple_templates(
+                image_path=image_path,
+                templates=templates,
+                count=count,
+                analysis=analysis,
+                category_filter=use_category_filter
+            )
+            
+            # 結果を整形
+            results = []
+            for template_id, reason, score in template_results:
+                # テンプレートIDの範囲チェック
+                if template_id < 0 or template_id >= len(templates):
+                    self.logger.warning(f"無効なテンプレートID: {template_id}、スキップします")
+                    continue
+                
+                selected_template = templates[template_id]
+                results.append((selected_template, reason, score))
+            
+            self.logger.info(f"AIが複数テンプレートを選択しました: {len(results)}件")
+            return results
+            
+        except ValueError as e:
+            # テンプレートリストが空など、値関連のエラー
+            self.logger.error(f"値エラーが発生しました: {str(e)}")
+            raise TemplateError(f"テンプレート選択エラー: {str(e)}")
+            
+        except GeminiAPIError as e:
+            # GeminiAPI関連のエラー
+            self.logger.error(f"GeminiAPIエラーが発生しました: {str(e)}")
+            raise TemplateError(f"GeminiAPIエラー: {str(e)}")
+            
+        except Exception as e:
+            # その他の予期しないエラー
+            self.logger.error(f"AIによる複数テンプレート選択中に予期しないエラーが発生しました: {str(e)}")
+            raise TemplateError(f"予期しないエラー: {str(e)}")

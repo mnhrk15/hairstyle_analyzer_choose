@@ -67,6 +67,11 @@ from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, Attribu
 
 def init_session_state():
     """セッションステートを初期化"""
+    # ロギング初期化フラグの確認と設定
+    if "logging_initialized" not in st.session_state:
+        logging.info("ロギングを初期化しました")
+        st.session_state["logging_initialized"] = True
+    
     # セッション変数の初期化
     if SESSION_PROCESSOR not in st.session_state:
         st.session_state[SESSION_PROCESSOR] = None
@@ -92,6 +97,9 @@ def init_session_state():
     # APIキーのセッション変数初期化は削除
     if SESSION_SALON_URL not in st.session_state:
         st.session_state[SESSION_SALON_URL] = ""
+    # ワークフロー状態の初期化
+    if "workflow_state" not in st.session_state:
+        st.session_state["workflow_state"] = "initial"
 
 
 def update_progress(current, total, message="", stage_details=None):
@@ -112,8 +120,21 @@ def update_progress(current, total, message="", stage_details=None):
         
         st.session_state[SESSION_PROGRESS] = progress
 
-
-async def process_images(processor, image_paths, stylists=None, coupons=None, use_cache=False):
+async def process_images(processor, image_paths, stylists=None, coupons=None, use_cache=False, template_count=3):
+    """
+    画像を処理して結果を取得する非同期関数
+    
+    Args:
+        processor: 画像処理プロセッサー
+        image_paths: 画像ファイルのパスリスト
+        stylists: スタイリスト情報のリスト（オプション）
+        coupons: クーポン情報のリスト（オプション）
+        use_cache: キャッシュを使用するかどうか（デフォルト: False）
+        template_count: 選択するテンプレート数（デフォルト: 3）
+        
+    Returns:
+        処理結果のリスト
+    """
     """画像を処理して結果を取得する非同期関数"""
     results = []
     total = len(image_paths)
@@ -192,10 +213,10 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
                 # 画像処理
                 if stylists and coupons:
                     # スタイリストとクーポンのデータを渡して処理
-                    result = await processor.process_single_image(path_obj, stylists, coupons, use_cache=use_cache)
+                    result = await processor.process_single_image(path_obj, stylists, coupons, use_cache=use_cache, template_count=template_count)
                 else:
                     # 基本処理
-                    result = await processor.process_single_image(path_obj, use_cache=use_cache)
+                    result = await processor.process_single_image(path_obj, use_cache=use_cache, template_count=template_count)
                 
                 # 処理段階の詳細情報を更新（完了）
                 stage_details = f"処理完了: 画像 {i+1}/{total}\n"
@@ -324,6 +345,12 @@ async def process_images(processor, image_paths, stylists=None, coupons=None, us
 def create_processor(config_manager):
     """プロセッサーを作成する関数"""
     try:
+        # すでにセッションにプロセッサーが存在し、初期化されている場合は再利用
+        if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
+            if "processor_initialized" in st.session_state and st.session_state["processor_initialized"]:
+                logging.debug("プロセッサーは既に初期化されています。既存のインスタンスを使用します。")
+                return st.session_state[SESSION_PROCESSOR]
+            
         logging.info("プロセッサーの作成を開始します")
         
         # 設定マネージャーがNoneの場合の対応
@@ -382,6 +409,10 @@ def create_processor(config_manager):
         )
         
         logging.info("プロセッサーの作成が完了しました")
+        
+        # 初期化フラグをセット
+        st.session_state["processor_initialized"] = True
+        
         return processor
         
     except Exception as e:
@@ -510,8 +541,188 @@ def display_progress():
             if progress["complete"]:
                 st.success(f"🎉 処理が完了しました: {current}/{total}画像")
 
+def display_template_selection(results):
+    """
+    テンプレート選択UIを表示する関数
+    
+    この関数は、各画像に対して複数のテンプレート候補を表示し、
+    ユーザーが最適なテンプレートを選択できるようにします。
+    
+    Args:
+        results: 処理結果のリスト
+    """
+    if not results:
+        st.warning("表示する結果がありません。")
+        return
+    
+    st.header("スタイルテンプレート選択")
+    st.markdown("""
+    各画像に対して、AIが選出した最適なスタイルテンプレートの候補から選択してください。
+    選択が完了したら、下部の「選択を確定して出力」ボタンをクリックしてください。
+    """)
+    
+    # 選択状態を保存するセッション変数
+    if "template_selections" not in st.session_state:
+        st.session_state["template_selections"] = {}
+    
+    # 各画像ごとに選択UIを表示
+    for i, result in enumerate(results):
+        st.subheader(f"画像 {i+1}: {result.image_name}")
+        
+        # 画像と選択UIを横に並べる
+        col1, col2 = st.columns([1, 2])
+        
+        # 画像表示
+        with col1:
+            if hasattr(result, 'image_path') and result.image_path:
+                try:
+                    image = Image.open(result.image_path)
+                    st.image(image, width=250)
+                except Exception as e:
+                    st.error(f"画像の表示に失敗しました: {str(e)}")
+                    st.write(f"画像パス: {result.image_path}")
+        
+        # テンプレート選択UI
+        with col2:
+            # テンプレート候補があるか確認
+            if hasattr(result, 'template_candidates') and result.template_candidates:
+                # 選択肢の作成
+                options = []
+                for j, candidate in enumerate(result.template_candidates):
+                    template = candidate.template
+                    score = candidate.score
+                    title = template.title
+                    options.append(f"{title} (スコア: {score:.2f})")
+                
+                # 初期選択状態の設定
+                default_index = 0
+                result_id = str(id(result))
+                if result_id in st.session_state["template_selections"]:
+                    default_index = st.session_state["template_selections"][result_id]
+                else:
+                    # 初期状態では最初の候補（最高スコア）を選択
+                    for j, candidate in enumerate(result.template_candidates):
+                        if candidate.is_selected:
+                            default_index = j
+                            break
+                
+                # ラジオボタンで選択
+                selected = st.radio(
+                    "最適なスタイルを選択してください:",
+                    options,
+                    index=default_index,
+                    key=f"template_select_{i}"
+                )
+                
+                # 選択結果の保存
+                selected_idx = options.index(selected)
+                st.session_state["template_selections"][result_id] = selected_idx
+                
+                # 選択されたテンプレートの詳細表示
+                selected_template = result.template_candidates[selected_idx].template
+                selected_reason = result.template_candidates[selected_idx].reason
+                
+                # 選択理由の表示
+                st.info(f"選択理由: {selected_reason}")
+                
+                # テンプレート詳細の表示
+                with st.expander("テンプレート詳細", expanded=False):
+                    st.write(f"**タイトル**: {selected_template.title}")
+                    st.write(f"**メニュー**: {selected_template.menu}")
+                    st.write(f"**コメント**: {selected_template.comment}")
+                    st.write(f"**ハッシュタグ**: {selected_template.hashtag}")
+            else:
+                st.warning("この画像にはテンプレート候補がありません。")
+    
+    # 選択確定ボタン
+    if st.button("選択を確定して出力", type="primary", key="confirm_template_button"):
+        # 選択結果を反映
+        for i, result in enumerate(results):
+            result_id = str(id(result))
+            if result_id in st.session_state["template_selections"] and hasattr(result, 'template_candidates'):
+                selected_idx = st.session_state["template_selections"][result_id]
+                
+                # 選択状態の更新
+                for j, candidate in enumerate(result.template_candidates):
+                    candidate.is_selected = (j == selected_idx)
+                
+                # 選択されたテンプレートを結果オブジェクトに設定
+                selected_template = result.template_candidates[selected_idx].template
+                result.user_selected_template = selected_template
+                
+                # ここが重要: selected_templateにも選択したテンプレートを設定する
+                result.selected_template = selected_template
+                
+                # ログ出力で確認
+                logging.info(f"画像 {result.image_name} のテンプレートを選択しました: {selected_template.title}")
+        
+        st.success("選択が確定されました。出力ファイルが更新されます。")
+        
+        # セッションに結果を保存
+        st.session_state[SESSION_RESULTS] = results
+        # 処理完了フラグを設定
+        st.session_state["processing_complete"] = True
+        # テンプレート選択完了フラグを設定
+        st.session_state["templates_selected"] = True
+        # ワークフロー状態を更新
+        st.session_state["workflow_state"] = "output_ready"
+        
+        # 出力ファイルの生成
+        try:
+            if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
+                processor = st.session_state[SESSION_PROCESSOR]
+                
+                # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
+                processor.clear_results()
+                process_results = convert_to_process_results(results)
+                
+                # デバッグ出力
+                logging.info(f"変換後のプロセス結果: {len(process_results)}件")
+                for pr in process_results:
+                    logging.info(f"プロセス結果: 画像={pr.image_name}, テンプレート={pr.selected_template.title}")
+                
+                # 結果が空でないことを確認
+                if not process_results:
+                    raise ValueError("変換された処理結果が空です。")
+                
+                processor.results.extend(process_results)
+                
+                # ダウンロード可能なファイルを生成
+                st.write("## 出力ファイルのダウンロード")
+                st.write("選択したテンプレートを反映したファイルがダウンロードできます。")
+                
+                # 個別のtryブロックで各出力を試みる
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    try:
+                        excel_success = generate_excel_download(processor, results, "Excelファイルのダウンロード")
+                        logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
+                    except Exception as excel_err:
+                        logging.error(f"Excel出力エラー: {str(excel_err)}")
+                        st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
+                
+                with col2:
+                    try:
+                        text_success = generate_text_download(processor, results, "テキストファイルのダウンロード")
+                        logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
+                    except Exception as text_err:
+                        logging.error(f"テキスト出力エラー: {str(text_err)}")
+                        st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
+            else:
+                logging.error("プロセッサーがセッションにありません")
+                st.error("処理エンジンがセッションにありません。アプリを再読み込みしてください。")
+        except Exception as e:
+            logging.error(f"出力ファイル生成エラー: {str(e)}")
+            import traceback
+            logging.error(traceback.format_exc())
+            st.error(f"出力ファイル生成中にエラーが発生しました: {str(e)}")
+        
+        # 状態変更を確実に反映させるためrerun
+        st.rerun()
 
 def display_results(results):
+    """処理結果を表示する関数"""
     """処理結果を表示する関数"""
     if not results:
         st.warning("表示する結果がありません。")
@@ -932,196 +1143,184 @@ def render_sidebar(config_manager):
         
 
 def convert_to_process_results(results):
-    """結果をProcessResultオブジェクトに変換する関数"""
-    from hairstyle_analyzer.data.models import ProcessResult, StyleAnalysis, AttributeAnalysis, Template, StylistInfo, CouponInfo, StyleFeatures
+    """
+    表示用の結果オブジェクトをプロセッサー用のProcessResultオブジェクトに変換する関数
     
-    # ファイル名マッピングを取得
-    filename_mapping = st.session_state.get("filename_mapping", {})
+    Args:
+        results: 表示用の結果オブジェクトのリスト
+    
+    Returns:
+        ProcessResultオブジェクトのリスト
+    """
+    from hairstyle_analyzer.data.models import ProcessResult, Template, StyleAnalysis, StyleFeatures, AttributeAnalysis
     
     process_results = []
+    
     for result in results:
-        try:
-            if isinstance(result, dict):
-                # 辞書の場合はProcessResultオブジェクトに変換
-                # 必要なオブジェクトを作成
-                image_name = result.get("image_name", "")
-                
-                # ファイル名を元のファイル名に置き換え
-                current_name_lower = image_name.lower()
-                if current_name_lower in filename_mapping:
-                    original_name = filename_mapping[current_name_lower]
-                    logging.info(f"エクスポート用ファイル名を置換: {image_name} -> {original_name}")
-                    image_name = original_name
-                
-                # StyleAnalysisの作成
-                style_analysis_dict = result.get("style_analysis", {})
-                features_dict = style_analysis_dict.get("features", {}) if isinstance(style_analysis_dict, dict) else {}
-                
-                features = StyleFeatures(
-                    color=features_dict.get("color", ""),
-                    cut_technique=features_dict.get("cut_technique", ""),
-                    styling=features_dict.get("styling", ""),
-                    impression=features_dict.get("impression", "")
+        # 画像情報
+        image_name = result.image_name
+        image_path = getattr(result, 'image_path', None)
+        
+        # スタイル分析結果
+        style_analysis = getattr(result, 'style_analysis', None)
+        if not style_analysis:
+            # スタイル分析結果がない場合、デフォルト値を設定
+            style_analysis = StyleAnalysis(
+                category="不明",
+                features=StyleFeatures(
+                    color="不明",
+                    cut_technique="不明",
+                    styling="不明",
+                    impression="不明"
+                ),
+                keywords=[]
+            )
+        
+        # 属性分析結果
+        attribute_analysis = getattr(result, 'attribute_analysis', None)
+        if not attribute_analysis:
+            # 属性分析結果がない場合、デフォルト値を設定
+            attribute_analysis = AttributeAnalysis(
+                sex="不明",
+                length="不明"
+            )
+        
+        # 選択されたテンプレート
+        # まず user_selected_template を確認し、次に selected_template
+        selected_template = None
+        if hasattr(result, 'user_selected_template') and result.user_selected_template:
+            selected_template = result.user_selected_template
+            logging.info(f"ユーザー選択テンプレートを使用: {selected_template.title}")
+        elif hasattr(result, 'selected_template') and result.selected_template:
+            selected_template = result.selected_template
+            logging.info(f"システム選択テンプレートを使用: {selected_template.title}")
+        else:
+            # テンプレート候補から選択されているものを探す
+            if hasattr(result, 'template_candidates') and result.template_candidates:
+                for candidate in result.template_candidates:
+                    if candidate.is_selected:
+                        selected_template = candidate.template
+                        logging.info(f"テンプレート候補から選択されたテンプレートを使用: {selected_template.title}")
+                        break
+            
+            # それでも選択されたテンプレートがない場合、デフォルトテンプレートを作成
+            if not selected_template:
+                logging.warning(f"選択されたテンプレートが見つかりません。デフォルトを使用します: {image_name}")
+                selected_template = Template(
+                    category="不明",
+                    title=f"{image_name}のスタイル",
+                    menu="不明",
+                    comment="自動生成されたスタイルコメント",
+                    hashtag=""
                 )
-                
-                style_analysis = StyleAnalysis(
-                    category=style_analysis_dict.get("category", "") if isinstance(style_analysis_dict, dict) else "",
-                    features=features,
-                    keywords=style_analysis_dict.get("keywords", []) if isinstance(style_analysis_dict, dict) else []
-                )
-                
-                # AttributeAnalysisの作成
-                attribute_analysis_dict = result.get("attribute_analysis", {})
-                attribute_analysis = AttributeAnalysis(
-                    sex=attribute_analysis_dict.get("sex", "") if isinstance(attribute_analysis_dict, dict) else "",
-                    length=attribute_analysis_dict.get("length", "") if isinstance(attribute_analysis_dict, dict) else ""
-                )
-                
-                # Templateの作成
-                template_dict = result.get("selected_template", {})
-                template = Template(
-                    category=template_dict.get("category", "") if isinstance(template_dict, dict) else "",
-                    title=template_dict.get("title", "") if isinstance(template_dict, dict) else "",
-                    menu=template_dict.get("menu", "") if isinstance(template_dict, dict) else "",
-                    comment=template_dict.get("comment", "") if isinstance(template_dict, dict) else "",
-                    hashtag=template_dict.get("hashtag", "") if isinstance(template_dict, dict) else ""
-                )
-                
-                # StylistInfoの作成
-                stylist_dict = result.get("selected_stylist", {})
-                stylist = StylistInfo(
-                    name=stylist_dict.get("name", "") if isinstance(stylist_dict, dict) else "",
-                    specialties=stylist_dict.get("specialties", "") if isinstance(stylist_dict, dict) else "",
-                    description=stylist_dict.get("description", "") if isinstance(stylist_dict, dict) else ""
-                )
-                
-                # CouponInfoの作成
-                coupon_dict = result.get("selected_coupon", {})
-                coupon = CouponInfo(
-                    name=coupon_dict.get("name", "") if isinstance(coupon_dict, dict) else "",
-                    price=coupon_dict.get("price", 0) if isinstance(coupon_dict, dict) else 0,
-                    description=coupon_dict.get("description", "") if isinstance(coupon_dict, dict) else ""
-                )
-                
-                # ProcessResultの作成
-                process_result = ProcessResult(
-                    image_name=image_name,
-                    style_analysis=style_analysis,
-                    attribute_analysis=attribute_analysis,
-                    selected_template=template,
-                    selected_stylist=stylist,
-                    selected_coupon=coupon,
-                    stylist_reason=result.get("stylist_reason", ""),
-                    coupon_reason=result.get("coupon_reason", ""),
-                    template_reason=result.get("template_reason", "")
-                )
-                
-                process_results.append(process_result)
-            else:
-                # すでにProcessResultオブジェクトの場合はそのまま追加
-                # ただし、ファイル名は元のファイル名に置き換え
-                if hasattr(result, 'image_name'):
-                    current_name = result.image_name
-                    current_name_lower = current_name.lower()
-                    if current_name_lower in filename_mapping:
-                        original_name = filename_mapping[current_name_lower]
-                        logging.info(f"オブジェクトのファイル名を置換: {current_name} -> {original_name}")
-                        result.image_name = original_name
-                
-                process_results.append(result)
-        except Exception as e:
-            logging.error(f"結果変換中にエラーが発生しました: {str(e)}")
-            import traceback
-            logging.error(traceback.format_exc())
-            # エラーが発生しても他の結果を続行
-            continue
+        
+        # 選択されたスタイリストとクーポン
+        selected_stylist = getattr(result, 'selected_stylist', None)
+        selected_coupon = getattr(result, 'selected_coupon', None)
+        
+        # 選択理由
+        stylist_reason = getattr(result, 'stylist_reason', None)
+        coupon_reason = getattr(result, 'coupon_reason', None)
+        template_reason = getattr(result, 'template_reason', None)
+        
+        # テンプレート候補リスト
+        template_candidates = getattr(result, 'template_candidates', [])
+        
+        # ProcessResultオブジェクトの作成
+        process_result = ProcessResult(
+            image_name=image_name,
+            image_path=image_path,
+            style_analysis=style_analysis,
+            attribute_analysis=attribute_analysis,
+            selected_template=selected_template,  # 選択されたテンプレート
+            selected_stylist=selected_stylist,
+            selected_coupon=selected_coupon,
+            stylist_reason=stylist_reason,
+            coupon_reason=coupon_reason,
+            template_reason=template_reason,
+            template_candidates=template_candidates,
+            user_selected_template=getattr(result, 'user_selected_template', None)
+        )
+        
+        process_results.append(process_result)
     
     return process_results
 
 def generate_excel_download(processor, results, title="タイトル生成が完了しました。"):
-    """プロセッサーを使用してExcelファイルを生成し、ダウンロードボタンを表示する関数"""
+    """
+    Excel出力とダウンロードボタンを表示する関数
+    
+    Args:
+        processor: プロセッサー
+        results: 処理結果のリスト
+        title: ダウンロードボタンのタイトル
+    """
     try:
-        # プロセッサーの結果が既に設定されているか確認し、設定されていなければ追加
-        if not processor.results:
-            # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
-            process_results = convert_to_process_results(results)
-            processor.results.extend(process_results)
+        # メモリにExcelファイルを直接生成
+        logging.info("Excelデータをメモリに生成します")
+        excel_data = processor.get_excel_binary()
         
-        # Excelバイナリデータを取得
-        excel_bytes = processor.get_excel_binary()
+        # ダウンロードボタンの表示
+        st.subheader("Excelファイルのダウンロード")
+        download_filename = f"HairStyle_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
-        # Excelファイルの生成
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"hairstyle_analysis_{timestamp}.xlsx"
+        st.download_button(
+            label="Excelファイルをダウンロード",
+            data=excel_data,
+            file_name=download_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_excel_button"
+        )
         
-        # 通知メッセージを削除
-        
-        # 目立つスタイルでダウンロードボタンを表示
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="⬇️ Excelファイルをダウンロード ⬇️",
-                data=excel_bytes,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="クリックしてExcelファイルをダウンロード",
-                type="primary",
-                use_container_width=True
-            )
-        
-        # 少しスペースを追加
-        st.write("")
+        st.success(f"Excelファイルの生成が完了しました。上のボタンからダウンロードしてください。")
         
         return True
     
     except Exception as e:
-        logging.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        logging.error(f"Excelファイル生成エラー: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
-        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        st.error(f"Excelファイル生成中にエラーが発生しました: {str(e)}")
         return False
 
 def generate_text_download(processor, results, title="タイトル生成が完了しました。"):
-    """プロセッサーを使用してテキストファイルを生成し、ダウンロードボタンを表示する関数"""
+    """
+    テキスト出力とダウンロードボタンを表示する関数
+    
+    Args:
+        processor: プロセッサー
+        results: 処理結果のリスト
+        title: ダウンロードボタンのタイトル
+    """
     try:
-        # プロセッサーの結果が既に設定されているか確認し、設定されていなければ追加
-        if not processor.results:
-            # 結果をProcessResultオブジェクトに変換してプロセッサーに追加
-            process_results = convert_to_process_results(results)
-            processor.results.extend(process_results)
-        
-        # テキストデータを取得
+        # メモリにテキストデータを直接生成
+        logging.info("テキストデータをメモリに生成します")
         text_content = processor.get_text_content()
         
-        # テキストファイルの生成
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"hairstyle_analysis_{timestamp}.txt"
+        # テキストをUTF-8でエンコード
+        text_data = text_content.encode('utf-8')
         
-        # 通知メッセージを削除
+        # ダウンロードボタンの表示
+        st.subheader("テキストファイルのダウンロード")
+        download_filename = f"HairStyle_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         
-        # 目立つスタイルでダウンロードボタンを表示
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="⬇️ テキストファイルをダウンロード ⬇️",
-                data=text_content,
-                file_name=filename,
-                mime="text/plain",
-                help="クリックしてテキストファイルをダウンロード",
-                type="primary",
-                use_container_width=True
-            )
+        st.download_button(
+            label="テキストファイルをダウンロード",
+            data=text_data,
+            file_name=download_filename,
+            mime="text/plain",
+            key="download_text_button"
+        )
         
-        # 少しスペースを追加
-        st.write("")
+        st.success(f"テキストファイルの生成が完了しました。上のボタンからダウンロードしてください。")
         
         return True
     
     except Exception as e:
-        logging.error(f"テキスト出力中にエラーが発生しました: {str(e)}")
+        logging.error(f"テキストファイル生成エラー: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
-        st.error(f"テキスト出力中にエラーが発生しました: {str(e)}")
+        st.error(f"テキストファイル生成中にエラーが発生しました: {str(e)}")
         return False
 
 def render_main_content():
@@ -1129,6 +1328,13 @@ def render_main_content():
     
     # 必要な関数をローカルスコープにインポート（名前解決エラー回避のため）
     from hairstyle_analyzer.ui.streamlit_app import convert_to_process_results, generate_excel_download, generate_text_download
+    
+    # 出力ディレクトリの確認と作成
+    if SESSION_CONFIG in st.session_state:
+        config_manager = st.session_state[SESSION_CONFIG]
+        output_dir = config_manager.paths.output_excel.parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"出力ディレクトリの確認/作成: {output_dir}")
     
     # タイトル表示
     st.write("# Style Generator")
@@ -1139,272 +1345,288 @@ def render_main_content():
     サロン情報を取得してから、画像をアップロードして「タイトル生成」ボタンをクリックしてください。
     """)
     
-    # 画像アップロード部分
-    uploaded_files = st.file_uploader(
-        "ヘアスタイル画像をアップロードしてください",
-        type=["png", "jpg", "jpeg"],
-        accept_multiple_files=True,
-        help="PNG, JPG, JPEGフォーマットの画像ファイルをアップロードできます。"
-    )
+    # ワークフロー状態を取得
+    workflow_state = st.session_state.get("workflow_state", "initial")
+    logging.debug(f"現在のワークフロー状態: {workflow_state}")
     
-    # アップロードされた画像のプレビュー表示
-    if uploaded_files:
-        st.write(f"{len(uploaded_files)}枚の画像がアップロードされました")
-        
-        # 画像プレビューを表示（横に並べる）- 列数を4に増やし、画像サイズを制限
-        cols = st.columns(min(4, len(uploaded_files)))
-        for i, uploaded_file in enumerate(uploaded_files[:8]):  # 最大8枚まで表示
-            with cols[i % 4]:
-                # 画像を開いてリサイズ
-                image = Image.open(uploaded_file)
-                # 画像の最大幅を200pxに制限
-                st.image(image, caption=uploaded_file.name, width=200)
-        
-        # 8枚以上の場合は省略メッセージを表示
-        if len(uploaded_files) > 8:
-            st.write(f"他 {len(uploaded_files) - 8} 枚の画像は省略されています")
-        
-        # 処理開始ボタン
-        if st.button("タイトル生成", type="primary"):
-            # セッションからプロセッサーを取得または初期化
-            try:
-                # プロセッサーが存在するか確認
-                if SESSION_PROCESSOR not in st.session_state or st.session_state[SESSION_PROCESSOR] is None:
-                    logging.info("プロセッサーがセッションに存在しないため、新規作成します")
-                    config_manager = get_config_manager()
-                    processor = create_processor(config_manager)
-                    
-                    # 初期化に成功したか確認
-                    if processor is None:
-                        st.error("プロセッサーの初期化に失敗しました。ログを確認してください。")
-                        return
-                    
-                    # セッションに保存
-                    st.session_state[SESSION_PROCESSOR] = processor
-                    logging.info("プロセッサーを初期化してセッションに保存しました")
-                else:
-                    processor = st.session_state[SESSION_PROCESSOR]
-                    logging.info("セッションからプロセッサーを取得しました")
-                
-                # 一時ディレクトリに画像を保存
-                temp_dir = Path(os.environ.get("TEMP_DIR", "temp")) / "hairstyle_analyzer"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                image_paths = handle_image_upload(uploaded_files)
-                
-                if not image_paths:
-                    st.error("画像の保存中にエラーが発生しました。")
-                    return
-                
-                logging.info(f"{len(image_paths)}枚の画像を一時ディレクトリに保存しました")
-                
-                # プログレスバーの表示
-                progress_container = st.container()
-                with progress_container:
-                    # プログレスバーのスタイル改善
-                    st.markdown("""
-                    <style>
-                        .stProgress > div > div {
-                            background-color: #4CAF50;
-                            transition: width 0.3s ease;
-                        }
-                        .progress-label {
-                            font-size: 16px;
-                            font-weight: bold;
-                            margin-bottom: 5px;
-                        }
-                    </style>
-                    """, unsafe_allow_html=True)
-                    
-                    # プログレスバーのラベル表示
-                    st.markdown('<p class="progress-label">画像処理の進捗状況</p>', unsafe_allow_html=True)
-                    
-                    # プログレスバーと状態テキスト
-                    progress_bar = st.progress(0)
-                    col1, col2 = st.columns(2)
-                    status_text = col1.empty()
-                    time_text = col2.empty()
-                
-                # 初期化
+    # ワークフロー状態に基づいた表示制御
+    if workflow_state == "output_ready" and "templates_selected" in st.session_state and st.session_state["templates_selected"]:
+        # 出力準備完了状態：テンプレート選択画面と詳細結果表示
+        if SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS]:
+            results = st.session_state[SESSION_RESULTS]
+            
+            # テンプレート選択の表示（編集モードへのリンク表示）
+            st.subheader("スタイルテンプレート選択")
+            st.info("テンプレート選択は完了しています。再度選択する場合は「テンプレートを再選択する」ボタンをクリックしてください。")
+            
+            if st.button("テンプレートを再選択する", key="reselect_template"):
+                # 編集モードに戻す
+                st.session_state["workflow_state"] = "processing_complete"
+                st.session_state["templates_selected"] = False
+                st.rerun()
+            
+            # 詳細結果の表示
+            st.subheader("詳細な分析結果")
+            display_results(results)
+            
+            # 出力ファイルのダウンロードボタンを表示
+            st.write("## 出力ファイルのダウンロード")
+            st.write("選択したテンプレートを反映したファイルがダウンロードできます。")
+            
+            if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
                 processor = st.session_state[SESSION_PROCESSOR]
                 
-                # 非同期処理を実行
-                with st.spinner("画像を処理中..."):
-                    # 進捗コールバック関数
-                    def update_progress_callback(current, total, message=""):
-                        # セッションから最新の進捗情報を取得
-                        if SESSION_PROGRESS in st.session_state:
-                            progress_data = st.session_state[SESSION_PROGRESS]
-                            # 処理中の画像のインデックス
-                            img_index = progress_data.get("current", 0)
-                            # 総画像数
-                            total_images = progress_data.get("total", 1)
-                            
-                            # 各画像の進捗を5ステップに分割
-                            # 画像ごとの処理進捗を計算（0-1の範囲）
-                            image_progress = float(current) / float(total) if total > 0 else 0
-                            
-                            # 全体の進捗を計算（0-1の範囲）
-                            # 前の画像はすでに完了（各1.0）、現在の画像は部分的に完了（0.0-1.0）
-                            overall_progress = (img_index + image_progress) / total_images
-                            
-                            # プログレスバーの更新
-                            progress_bar.progress(overall_progress)
-                            
-                            # 進捗状況のテキスト表示
-                            percentage = int(overall_progress * 100)
-                            status_text.markdown(f"**処理中**: 画像 {img_index+1}/{total_images} ({percentage}%)<br>**状態**: {message}", unsafe_allow_html=True)
-                            
-                            # 経過時間と推定残り時間の表示
-                            if "start_time" in progress_data:
-                                elapsed = time.time() - progress_data["start_time"]
-                                
-                                # 経過時間のフォーマット
-                                if elapsed < 60:
-                                    elapsed_str = f"{elapsed:.1f}秒"
-                                else:
-                                    minutes = int(elapsed // 60)
-                                    seconds = int(elapsed % 60)
-                                    elapsed_str = f"{minutes}分{seconds}秒"
-                                
-                                time_info = f"**経過時間**: {elapsed_str}<br>"
-                                
-                                # 処理速度と残り時間の計算（現在の画像も考慮）
-                                # 完了した画像 + 現在の画像の進捗
-                                completed_progress = img_index + image_progress
-                                if completed_progress > 0:
-                                    # 1画像あたりの平均秒数
-                                    avg_seconds_per_image = elapsed / completed_progress
-                                    # 残りの画像数
-                                    remaining_images = total_images - completed_progress
-                                    # 残り時間の予測
-                                    remaining = avg_seconds_per_image * remaining_images
-                                    
-                                    # 処理速度の表示
-                                    images_per_minute = 60 / avg_seconds_per_image
-                                    if images_per_minute < 1:
-                                        speed_str = f"{images_per_minute*60:.1f} 画像/時間"
-                                    else:
-                                        speed_str = f"{images_per_minute:.1f} 画像/分"
-                                    
-                                    time_info += f"**処理速度**: {speed_str}<br>"
-                                    
-                                    # 残り時間の表示
-                                    if remaining < 60:
-                                        remaining_str = f"{remaining:.1f}秒"
-                                    else:
-                                        minutes = int(remaining // 60)
-                                        seconds = int(remaining % 60)
-                                        remaining_str = f"{minutes}分{seconds}秒"
-                                    
-                                    time_info += f"**推定残り時間**: {remaining_str}"
-                                
-                                time_text.markdown(time_info, unsafe_allow_html=True)
-                    
-                    # スタイリストとクーポンのデータを取得
-                    stylists = st.session_state.get(SESSION_STYLISTS, [])
-                    coupons = st.session_state.get(SESSION_COUPONS, [])
-                    
-                    # スタイリストとクーポンのデータが存在するか確認
-                    if not stylists:
-                        st.warning("スタイリスト情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
-                    if not coupons:
-                        st.warning("クーポン情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
-                    
-                    # キャッシュ使用設定の取得
-                    use_cache = st.session_state.get(SESSION_USE_CACHE, True)
-                    
-                    # 処理の実行（スタイリストとクーポンのデータとキャッシュ設定を渡す）
-                    # 進捗コールバック関数をセット
-                    processor.set_progress_callback(lambda current, total, message: update_progress_callback(current, total, message))
-                    results = asyncio.run(process_images(processor, image_paths, stylists, coupons, use_cache))
-                    
-                    # 処理完了
-                    progress_bar.progress(1.0)
-                    status_text.markdown("**処理完了**！🎉", unsafe_allow_html=True)
-                    
-                    # 処理詳細の表示
-                    if SESSION_PROGRESS in st.session_state and "stage_details" in st.session_state[SESSION_PROGRESS]:
-                        with progress_container.expander("処理の詳細を表示", expanded=False):
-                            st.write(st.session_state[SESSION_PROGRESS]["stage_details"])
-                    
-                    # 結果が空でないか確認
-                    if not results:
-                        st.error("画像処理中にエラーが発生しました。ログを確認してください。")
-                        return
-                    
-                    # 結果をセッションに保存
-                    st.session_state[SESSION_RESULTS] = results
-                    
-                    # 結果表示
-                    display_results(results)
-                    
-                    # ここから出力処理を追加
+                # 個別のtryブロックで各出力を試みる
+                col1, col2 = st.columns(2)
+                
+                with col1:
                     try:
-                        # プロセッサーがセッションに存在することを確認
-                        processor = st.session_state[SESSION_PROCESSOR]
-                        
-                        # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
-                        processor.clear_results()
-                        process_results = convert_to_process_results(results)
-                        processor.results.extend(process_results)
-                        
-                        # 出力形式の選択を削除し、両方の出力を表示
-                        st.write("### 出力ファイル")
-                        
-                        # 通知メッセージを表示
-                        st.success("タイトル生成が完了しました。下のボタンをクリックしてファイルをダウンロードしてください。")
-                        
-                        # Excel出力とダウンロードボタン表示
-                        generate_excel_download(processor, results, "タイトル生成が完了しました。")
-                        
-                        # テキスト出力とダウンロードボタン表示
-                        generate_text_download(processor, results, "タイトル生成が完了しました。")
-                    
-                    except Exception as e:
-                        logging.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
-                        import traceback
-                        logging.error(traceback.format_exc())
-                        st.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
+                        excel_success = generate_excel_download(processor, results, "Excelファイルのダウンロード")
+                        logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
+                    except Exception as excel_err:
+                        logging.error(f"Excel出力エラー: {str(excel_err)}")
+                        st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
+                
+                with col2:
+                    try:
+                        text_success = generate_text_download(processor, results, "テキストファイルのダウンロード")
+                        logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
+                    except Exception as text_err:
+                        logging.error(f"テキスト出力エラー: {str(text_err)}")
+                        st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
             
-            except Exception as e:
-                st.error(f"処理中にエラーが発生しました: {str(e)}")
-                logging.error(f"処理中にエラーが発生しました: {str(e)}")
-                import traceback
-                logging.error(traceback.format_exc())
+        else:
+            st.error("セッション状態に結果が見つかりません。アプリケーションを再読み込みしてください。")
+            # ワークフロー状態をリセット
+            st.session_state["workflow_state"] = "initial"
     
-    # 結果が既にセッションにある場合は表示
-    elif SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS]:
-        results = st.session_state[SESSION_RESULTS]
-        display_results(results)
+    elif workflow_state == "processing_complete" or (
+            SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS] and
+            "processing_complete" in st.session_state and st.session_state["processing_complete"]):
+        # 処理完了状態：テンプレート選択画面のみ表示（詳細結果は選択確定後に表示）
+        if SESSION_RESULTS in st.session_state and st.session_state[SESSION_RESULTS]:
+            results = st.session_state[SESSION_RESULTS]
+            display_template_selection(results)
+        else:
+            st.error("セッション状態に結果が見つかりません。アプリケーションを再読み込みしてください。")
+            # ワークフロー状態をリセット
+            st.session_state["workflow_state"] = "initial"
+    
+    else:
+        # 初期状態：画像アップロード画面
+        # 画像アップロード部分
+        uploaded_files = st.file_uploader(
+            "ヘアスタイル画像をアップロードしてください",
+            type=["png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+            help="PNG, JPG, JPEGフォーマットの画像ファイルをアップロードできます。"
+        )
         
-        # プロセッサーがセッションに存在するか確認
-        if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
-            try:
-                # セッションからプロセッサーを取得
-                processor = st.session_state[SESSION_PROCESSOR]
-                
-                # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
-                processor.clear_results()
-                process_results = convert_to_process_results(results)
-                processor.results.extend(process_results)
-                
-                # 出力形式の選択を削除し、両方の出力を表示
-                st.write("### 出力ファイル")
-                
-                # 通知メッセージを表示
-                st.success("以前の処理結果からファイルを生成できます。下のボタンをクリックしてダウンロードしてください。")
-                
-                # Excel出力とダウンロードボタン表示
-                generate_excel_download(processor, results, "以前の処理結果からExcelファイルを生成できます。")
-                
-                # テキスト出力とダウンロードボタン表示
-                generate_text_download(processor, results, "以前の処理結果からテキストファイルを生成できます。")
+        # アップロードされた画像のプレビュー表示
+        if uploaded_files:
+            st.write(f"{len(uploaded_files)}枚の画像がアップロードされました")
             
-            except Exception as e:
-                logging.error(f"既存結果からのファイル出力中にエラーが発生しました: {str(e)}")
-                import traceback
-                logging.error(traceback.format_exc())
-                st.error(f"ファイル出力中にエラーが発生しました: {str(e)}")
+            # 画像プレビューを表示（横に並べる）- 列数を4に増やし、画像サイズを制限
+            cols = st.columns(min(4, len(uploaded_files)))
+            for i, uploaded_file in enumerate(uploaded_files[:8]):  # 最大8枚まで表示
+                with cols[i % 4]:
+                    # 画像を開いてリサイズ
+                    image = Image.open(uploaded_file)
+                    # 画像の最大幅を200pxに制限
+                    st.image(image, caption=uploaded_file.name, width=200)
+            
+            # 8枚以上の場合は省略メッセージを表示
+            if len(uploaded_files) > 8:
+                st.write(f"他 {len(uploaded_files) - 8} 枚の画像は省略されています")
+            
+            # 処理開始ボタン
+            if st.button("タイトル生成", type="primary"):
+                # セッションからプロセッサーを取得または初期化
+                try:
+                    # プロセッサーが存在するか確認
+                    if SESSION_PROCESSOR not in st.session_state or st.session_state[SESSION_PROCESSOR] is None:
+                        logging.info("プロセッサーがセッションに存在しないため、新規作成します")
+                        config_manager = get_config_manager()
+                        processor = create_processor(config_manager)
+                        
+                        # 初期化に成功したか確認
+                        if processor is None:
+                            st.error("プロセッサーの初期化に失敗しました。ログを確認してください。")
+                            return
+                        
+                        # セッションに保存
+                        st.session_state[SESSION_PROCESSOR] = processor
+                        logging.info("プロセッサーを初期化してセッションに保存しました")
+                    else:
+                        processor = st.session_state[SESSION_PROCESSOR]
+                        logging.info("セッションからプロセッサーを取得しました")
+                    
+                    # 一時ディレクトリに画像を保存
+                    temp_dir = Path(os.environ.get("TEMP_DIR", "temp")) / "hairstyle_analyzer"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    image_paths = handle_image_upload(uploaded_files)
+                    
+                    if not image_paths:
+                        st.error("画像の保存中にエラーが発生しました。")
+                        return
+                    
+                    logging.info(f"{len(image_paths)}枚の画像を一時ディレクトリに保存しました")
+                    
+                    # プログレスバーの表示
+                    progress_container = st.container()
+                    with progress_container:
+                        # プログレスバーのスタイル改善
+                        st.markdown("""
+                        <style>
+                            .stProgress > div > div {
+                                background-color: #4CAF50;
+                                transition: width 0.3s ease;
+                            }
+                            .progress-label {
+                                font-size: 16px;
+                                font-weight: bold;
+                                margin-bottom: 5px;
+                            }
+                        </style>
+                        """, unsafe_allow_html=True)
+                        
+                        # プログレスバーのラベル表示
+                        st.markdown('<p class="progress-label">画像処理の進捗状況</p>', unsafe_allow_html=True)
+                        
+                        # プログレスバーと状態テキスト
+                        progress_bar = st.progress(0)
+                        col1, col2 = st.columns(2)
+                        status_text = col1.empty()
+                        time_text = col2.empty()
+                    
+                    # 初期化
+                    processor = st.session_state[SESSION_PROCESSOR]
+                    
+                    # 非同期処理を実行
+                    with st.spinner("画像を処理中..."):
+                        # 進捗コールバック関数
+                        def update_progress_callback(current, total, message=""):
+                            # セッションから最新の進捗情報を取得
+                            if SESSION_PROGRESS in st.session_state:
+                                progress_data = st.session_state[SESSION_PROGRESS]
+                                # 処理中の画像のインデックス
+                                img_index = progress_data.get("current", 0)
+                                # 総画像数
+                                total_images = progress_data.get("total", 1)
+                                
+                                # 各画像の進捗を5ステップに分割
+                                # 画像ごとの処理進捗を計算（0-1の範囲）
+                                image_progress = float(current) / float(total) if total > 0 else 0
+                                
+                                # 全体の進捗を計算（0-1の範囲）
+                                # 前の画像はすでに完了（各1.0）、現在の画像は部分的に完了（0.0-1.0）
+                                overall_progress = (img_index + image_progress) / total_images
+                                
+                                # プログレスバーの更新
+                                progress_bar.progress(overall_progress)
+                                
+                                # 進捗状況のテキスト表示
+                                percentage = int(overall_progress * 100)
+                                status_text.markdown(f"**処理中**: 画像 {img_index+1}/{total_images} ({percentage}%)<br>**状態**: {message}", unsafe_allow_html=True)
+                                
+                                # 経過時間と推定残り時間の表示
+                                if "start_time" in progress_data:
+                                    elapsed = time.time() - progress_data["start_time"]
+                                    
+                                    # 経過時間のフォーマット
+                                    if elapsed < 60:
+                                        elapsed_str = f"{elapsed:.1f}秒"
+                                    else:
+                                        minutes = int(elapsed // 60)
+                                        seconds = int(elapsed % 60)
+                                        elapsed_str = f"{minutes}分{seconds}秒"
+                                    
+                                    time_info = f"**経過時間**: {elapsed_str}<br>"
+                                    
+                                    # 処理速度と残り時間の計算（現在の画像も考慮）
+                                    # 完了した画像 + 現在の画像の進捗
+                                    completed_progress = img_index + image_progress
+                                    if completed_progress > 0:
+                                        # 1画像あたりの平均秒数
+                                        avg_seconds_per_image = elapsed / completed_progress
+                                        # 残りの画像数
+                                        remaining_images = total_images - completed_progress
+                                        # 残り時間の予測
+                                        remaining = avg_seconds_per_image * remaining_images
+                                        
+                                        # 処理速度の表示
+                                        images_per_minute = 60 / avg_seconds_per_image
+                                        if images_per_minute < 1:
+                                            speed_str = f"{images_per_minute*60:.1f} 画像/時間"
+                                        else:
+                                            speed_str = f"{images_per_minute:.1f} 画像/分"
+                                        
+                                        time_info += f"**処理速度**: {speed_str}<br>"
+                                        
+                                        # 残り時間の表示
+                                        if remaining < 60:
+                                            remaining_str = f"{remaining:.1f}秒"
+                                        else:
+                                            minutes = int(remaining // 60)
+                                            seconds = int(remaining % 60)
+                                            remaining_str = f"{minutes}分{seconds}秒"
+                                        
+                                        time_info += f"**推定残り時間**: {remaining_str}"
+                                    
+                                    time_text.markdown(time_info, unsafe_allow_html=True)
+                        
+                        # スタイリストとクーポンのデータを取得
+                        stylists = st.session_state.get(SESSION_STYLISTS, [])
+                        coupons = st.session_state.get(SESSION_COUPONS, [])
+                        
+                        # スタイリストとクーポンのデータが存在するか確認
+                        if not stylists:
+                            st.warning("スタイリスト情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
+                        if not coupons:
+                            st.warning("クーポン情報が取得されていません。サイドバーの「サロンデータを取得」ボタンを押してデータを取得してください。")
+                        
+                        # キャッシュ使用設定の取得
+                        use_cache = st.session_state.get(SESSION_USE_CACHE, True)
+                        
+                        # 処理の実行（スタイリストとクーポンのデータとキャッシュ設定を渡す）
+                        # 進捗コールバック関数をセット
+                        processor.set_progress_callback(lambda current, total, message: update_progress_callback(current, total, message))
+                        # テンプレート候補数の設定（デフォルト: 3）
+                        template_count = 3
+                        results = asyncio.run(process_images(processor, image_paths, stylists, coupons, use_cache, template_count))
+                        
+                        # 処理完了
+                        progress_bar.progress(1.0)
+                        status_text.markdown("**処理完了**！🎉", unsafe_allow_html=True)
+                        
+                        # 処理詳細の表示
+                        if SESSION_PROGRESS in st.session_state and "stage_details" in st.session_state[SESSION_PROGRESS]:
+                            with progress_container.expander("処理の詳細を表示", expanded=False):
+                                st.write(st.session_state[SESSION_PROGRESS]["stage_details"])
+                        
+                        # 結果が空でないか確認
+                        if not results:
+                            st.error("画像処理中にエラーが発生しました。ログを確認してください。")
+                            return
+                        
+                        # 結果をセッションに保存
+                        st.session_state[SESSION_RESULTS] = results
+                        
+                        # ワークフロー状態を更新
+                        st.session_state["workflow_state"] = "processing_complete"
+                        st.session_state["processing_complete"] = True
+                        # テンプレート選択のクリア
+                        if "templates_selected" in st.session_state:
+                            del st.session_state["templates_selected"]
+                        
+                        # 画面を更新して結果表示画面に遷移
+                        st.rerun()
+                
+                except Exception as e:
+                    st.error(f"処理中にエラーが発生しました: {str(e)}")
+                    logging.error(f"処理中にエラーが発生しました: {str(e)}")
+                    import traceback
+                    logging.error(traceback.format_exc())
 
 
 def get_config_manager():
@@ -1573,8 +1795,41 @@ def run_streamlit_app(config_manager: ConfigManager, skip_page_config: bool = Fa
             layout="wide",
         )
     
+    # デバッグモード（開発中のみTrue）
+    debug_mode = config_manager.debug.enabled if hasattr(config_manager, 'debug') and hasattr(config_manager.debug, 'enabled') else False
+    
     # サイドバーの表示
     render_sidebar(config_manager)
+    
+    # デバッグ情報表示（デバッグモードがオンの場合のみ）
+    if debug_mode:
+        with st.sidebar.expander("デバッグ: セッション状態", expanded=False):
+            # 大きなオブジェクトを除外してセッション状態を表示
+            session_info = {}
+            for k, v in st.session_state.items():
+                if k not in ["config", "processor", "results"]:
+                    if isinstance(v, (str, int, float, bool)) or v is None:
+                        session_info[k] = v
+                    elif isinstance(v, list):
+                        session_info[k] = f"リスト({len(v)}件)"
+                    elif isinstance(v, dict):
+                        session_info[k] = f"辞書({len(v)}件)"
+                    else:
+                        session_info[k] = f"{type(v).__name__}"
+            
+            st.write(session_info)
+            
+            # ワークフロー状態の表示
+            st.write("### 現在のワークフロー状態")
+            st.info(st.session_state.get("workflow_state", "initial"))
+            
+            # セッションリセットボタン
+            if st.button("セッションをリセット"):
+                for key in list(st.session_state.keys()):
+                    if key != SESSION_CONFIG:  # 設定は保持
+                        del st.session_state[key]
+                st.success("セッションをリセットしました。")
+                st.rerun()
     
     # メインコンテンツ
     render_main_content()
