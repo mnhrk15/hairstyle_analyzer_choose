@@ -42,15 +42,17 @@ class TextExporter(TextExporterProtocol):
     テキスト生成の基本機能、カスタムフォーマット設定、データ変換などの機能が含まれます。
     """
     
-    def __init__(self, config: TextConfig):
+    def __init__(self, config: TextConfig, filename_mapping: Dict[str, str] = None):
         """
         初期化
         
         Args:
             config: テキスト出力設定
+            filename_mapping: ファイル名のマッピング辞書（オプション）
         """
         self.logger = logging.getLogger(__name__)
         self.config = config
+        self.filename_mapping = filename_mapping or {}
     
     @with_error_handling(TextExportError, "テキスト出力処理でエラーが発生しました")
     def export(self, results: List[ProcessResultProtocol], output_path: Union[str, Path]) -> Path:
@@ -151,50 +153,61 @@ class TextExporter(TextExporterProtocol):
     
     def _format_result(self, result: ProcessResultProtocol) -> str:
         """
-        単一の処理結果をテキスト形式にフォーマットします。
+        結果を文字列にフォーマットする
         
         Args:
             result: 処理結果
-            
-        Returns:
-            フォーマットされたテキスト
-        """
-        # 置換用の変数を作成
-        # 辞書型かオブジェクト型かを判定
-        if isinstance(result, dict):
-            # 辞書型の場合
-            image_name = result.get('image_name', '')
-            stylist_name = result.get('selected_stylist', {}).get('name', '') if isinstance(result.get('selected_stylist'), dict) else getattr(result.get('selected_stylist'), 'name', '')
-            comment = result.get('selected_template', {}).get('comment', '') if isinstance(result.get('selected_template'), dict) else getattr(result.get('selected_template'), 'comment', '')
-            title = result.get('selected_template', {}).get('title', '') if isinstance(result.get('selected_template'), dict) else getattr(result.get('selected_template'), 'title', '')
-            sex = result.get('attribute_analysis', {}).get('sex', '') if isinstance(result.get('attribute_analysis'), dict) else getattr(result.get('attribute_analysis'), 'sex', '')
-            length = result.get('attribute_analysis', {}).get('length', '') if isinstance(result.get('attribute_analysis'), dict) else getattr(result.get('attribute_analysis'), 'length', '')
-            menu = result.get('selected_template', {}).get('menu', '') if isinstance(result.get('selected_template'), dict) else getattr(result.get('selected_template'), 'menu', '')
-            coupon_name = result.get('selected_coupon', {}).get('name', '') if isinstance(result.get('selected_coupon'), dict) else getattr(result.get('selected_coupon'), 'name', '')
-            hashtag = result.get('selected_template', {}).get('hashtag', '') if isinstance(result.get('selected_template'), dict) else getattr(result.get('selected_template'), 'hashtag', '')
-        else:
-            # オブジェクト型の場合
-            image_name = getattr(result, 'image_name', '')
-            stylist_name = getattr(result.selected_stylist, 'name', '')
-            comment = getattr(result.selected_template, 'comment', '')
-            title = getattr(result.selected_template, 'title', '')
-            sex = getattr(result.attribute_analysis, 'sex', '')
-            length = getattr(result.attribute_analysis, 'length', '')
-            menu = getattr(result.selected_template, 'menu', '')
-            coupon_name = getattr(result.selected_coupon, 'name', '')
-            hashtag = getattr(result.selected_template, 'hashtag', '')
-
-        # フォーマットテンプレートに値を埋め込み
-        formatted_text = self.config.format_template.format(
-            image_name=image_name,
-            stylist_name=stylist_name,
-            comment=comment,
-            title=title,
-            sex=sex,
-            length=length,
-            menu=menu,
-            coupon_name=coupon_name,
-            hashtag=hashtag
-        )
         
-        return formatted_text 
+        Returns:
+            フォーマットされた文字列
+        """
+        try:
+            # 画像名の取得と変換
+            if isinstance(result, dict):
+                image_name = result.get('image_name', '')
+            else:
+                image_name = getattr(result, 'image_name', '')
+
+            # ファイル名の変換（小文字で比較）
+            image_name_lower = image_name.lower()
+            if image_name_lower in self.filename_mapping:
+                image_name = self.filename_mapping[image_name_lower]
+                self.logger.info(f"ファイル名を変換: {image_name_lower} -> {image_name}")
+
+            # その他の情報を取得
+            if isinstance(result, dict):
+                stylist_name = result.get('selected_stylist', {}).get('name', '')
+                comment = result.get('selected_template', {}).get('comment', '')
+                title = result.get('selected_template', {}).get('title', '')
+                sex = result.get('attribute_analysis', {}).get('sex', '')
+                length = result.get('attribute_analysis', {}).get('length', '')
+                menu = result.get('selected_template', {}).get('menu', '')
+                coupon_name = result.get('selected_coupon', {}).get('name', '')
+                hashtag = result.get('selected_template', {}).get('hashtag', '')
+            else:
+                stylist_name = getattr(result.selected_stylist, 'name', '')
+                comment = getattr(result.selected_template, 'comment', '')
+                title = getattr(result.selected_template, 'title', '')
+                sex = getattr(result.attribute_analysis, 'sex', '')
+                length = getattr(result.attribute_analysis, 'length', '')
+                menu = getattr(result.selected_template, 'menu', '')
+                coupon_name = getattr(result.selected_coupon, 'name', '')
+                hashtag = getattr(result.selected_template, 'hashtag', '')
+
+            # フォーマットテンプレートに値を埋め込み
+            formatted_text = self.config.format_template.format(
+                image_name=image_name,
+                stylist_name=stylist_name,
+                comment=comment,
+                title=title,
+                sex=sex,
+                length=length,
+                menu=menu,
+                coupon_name=coupon_name,
+                hashtag=hashtag
+            )
+            
+            return formatted_text
+        except Exception as e:
+            self.logger.error(f"結果のテキスト形式化エラー: {e}")
+            return f"[エラー: {str(e)}]" 

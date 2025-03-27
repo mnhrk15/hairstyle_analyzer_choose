@@ -55,7 +55,8 @@ class MainProcessor(MainProcessorProtocol):
         api_delay: float = 1.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
-        use_cache: bool = False
+        use_cache: bool = False,
+        filename_mapping: Dict[str, str] = None
     ):
         """
         初期化
@@ -71,6 +72,8 @@ class MainProcessor(MainProcessorProtocol):
             api_delay: API呼び出し間の遅延（秒）
             max_retries: 最大リトライ回数
             retry_delay: リトライ間隔（秒）
+            use_cache: キャッシュを使用するかどうか
+            filename_mapping: ファイル名のマッピング辞書（オプション）
         """
         self.logger = logging.getLogger(__name__)
         self.image_analyzer = image_analyzer
@@ -86,6 +89,7 @@ class MainProcessor(MainProcessorProtocol):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.use_cache = use_cache
+        self.filename_mapping = filename_mapping or {}
         
         # 画像アナライザーにキャッシュ設定を反映
         self.image_analyzer.use_cache = use_cache
@@ -119,6 +123,20 @@ class MainProcessor(MainProcessorProtocol):
         """
         if self.progress_callback:
             self.progress_callback(current, total, message)
+    
+    def set_filename_mapping(self, mapping: Dict[str, str]):
+        """
+        ファイル名マッピングを設定する
+        
+        Args:
+            mapping: ファイル名のマッピング辞書
+        """
+        self.filename_mapping = mapping
+        # エクスポーターにもマッピングを設定
+        if hasattr(self.excel_exporter, 'filename_mapping'):
+            self.excel_exporter.filename_mapping = mapping
+        if hasattr(self.text_exporter, 'filename_mapping'):
+            self.text_exporter.filename_mapping = mapping
     
     @cacheable(lambda self, image_path, *args, **kwargs: f"process_result:{image_path.name}")
     async def process_single_image(self, image_path: Path, stylists=None, coupons=None, template_count: int = 3) -> Optional[ProcessResultProtocol]:

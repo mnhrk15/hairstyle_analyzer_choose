@@ -349,14 +349,21 @@ def create_processor(config_manager):
         if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
             if "processor_initialized" in st.session_state and st.session_state["processor_initialized"]:
                 logging.debug("プロセッサーは既に初期化されています。既存のインスタンスを使用します。")
-                return st.session_state[SESSION_PROCESSOR]
-            
+                # ファイル名マッピングを更新
+                processor = st.session_state[SESSION_PROCESSOR]
+                if "filename_mapping" in st.session_state:
+                    processor.set_filename_mapping(st.session_state["filename_mapping"])
+                return processor
+        
         logging.info("プロセッサーの作成を開始します")
         
         # 設定マネージャーがNoneの場合の対応
         if config_manager is None:
             logging.error("設定マネージャーがNoneです")
             return None
+        
+        # ファイル名マッピングの取得
+        filename_mapping = st.session_state.get("filename_mapping", {})
         
         # テンプレートマネージャーの初期化
         template_manager = TemplateManager(config_manager.paths.template_csv)
@@ -388,8 +395,12 @@ def create_processor(config_manager):
         image_analyzer = ImageAnalyzer(gemini_service, cache_manager)
         template_matcher = TemplateMatcher(template_manager)
         style_matcher = StyleMatchingService(gemini_service)
-        excel_exporter = ExcelExporter(config_manager.excel)
-        text_exporter = TextExporter(config_manager.text)
+        
+        # エクスポーターの初期化（ファイル名マッピングを渡す）
+        excel_exporter = ExcelExporter(config_manager.excel, filename_mapping=filename_mapping)
+        text_exporter = TextExporter(config_manager.text, filename_mapping=filename_mapping)
+        
+        logging.info(f"エクスポーターにファイル名マッピングを設定: {len(filename_mapping)}件")
         
         # キャッシュ使用設定の取得
         use_cache = st.session_state.get(SESSION_USE_CACHE, True)
@@ -405,7 +416,8 @@ def create_processor(config_manager):
             cache_manager=cache_manager,
             batch_size=config_manager.processing.batch_size,
             api_delay=config_manager.processing.api_delay,
-            use_cache=use_cache
+            use_cache=use_cache,
+            filename_mapping=filename_mapping
         )
         
         logging.info("プロセッサーの作成が完了しました")
@@ -565,9 +577,17 @@ def display_template_selection(results):
     if "template_selections" not in st.session_state:
         st.session_state["template_selections"] = {}
     
+    # ファイル名マッピングを取得
+    filename_mapping = st.session_state.get("filename_mapping", {})
+    
     # 各画像ごとに選択UIを表示
     for i, result in enumerate(results):
-        st.subheader(f"画像 {i+1}: {result.image_name}")
+        # 画像名を取得（オリジナルのファイル名を使用）
+        current_name = result.image_name
+        current_name_lower = current_name.lower()
+        display_name = filename_mapping.get(current_name_lower, current_name)
+        
+        st.subheader(f"画像 {i+1}: {display_name}")
         
         # 画像と選択UIを横に並べる
         col1, col2 = st.columns([1, 2])
@@ -658,67 +678,43 @@ def display_template_selection(results):
         
         st.success("選択が確定されました。出力ファイルが更新されます。")
         
-        # セッションに結果を保存
+        # 結果をセッションに保存
         st.session_state[SESSION_RESULTS] = results
-        # 処理完了フラグを設定
-        st.session_state["processing_complete"] = True
-        # テンプレート選択完了フラグを設定
-        st.session_state["templates_selected"] = True
+        
+        # プロセッサーの更新
+        if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
+            processor = st.session_state[SESSION_PROCESSOR]
+            
+            # ファイル名マッピングを再設定
+            if "filename_mapping" in st.session_state:
+                filename_mapping = st.session_state["filename_mapping"]
+                processor.set_filename_mapping(filename_mapping)
+                logging.info(f"プロセッサーのファイル名マッピングを更新: {len(filename_mapping)}件")
+            
+            # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
+            processor.clear_results()
+            process_results = convert_to_process_results(results)
+            
+            # デバッグ出力
+            logging.info(f"変換後のプロセス結果: {len(process_results)}件")
+            for pr in process_results:
+                logging.info(f"プロセス結果: 画像={pr.image_name}, テンプレート={pr.selected_template.title}")
+            
+            # 結果が空でないことを確認
+            if not process_results:
+                raise ValueError("変換された処理結果が空です。")
+            
+            processor.results.extend(process_results)
+            
+            # セッションにプロセッサーを保存
+            st.session_state[SESSION_PROCESSOR] = processor
+        
         # ワークフロー状態を更新
         st.session_state["workflow_state"] = "output_ready"
+        st.session_state["processing_complete"] = True
+        st.session_state["templates_selected"] = True
         
-        # 出力ファイルの生成
-        try:
-            if SESSION_PROCESSOR in st.session_state and st.session_state[SESSION_PROCESSOR] is not None:
-                processor = st.session_state[SESSION_PROCESSOR]
-                
-                # 出力前にプロセッサーの結果をクリアして、新しい結果をセット
-                processor.clear_results()
-                process_results = convert_to_process_results(results)
-                
-                # デバッグ出力
-                logging.info(f"変換後のプロセス結果: {len(process_results)}件")
-                for pr in process_results:
-                    logging.info(f"プロセス結果: 画像={pr.image_name}, テンプレート={pr.selected_template.title}")
-                
-                # 結果が空でないことを確認
-                if not process_results:
-                    raise ValueError("変換された処理結果が空です。")
-                
-                processor.results.extend(process_results)
-                
-                # ダウンロード可能なファイルを生成
-                st.write("## 出力ファイルのダウンロード")
-                st.write("選択したテンプレートを反映したファイルがダウンロードできます。")
-                
-                # 個別のtryブロックで各出力を試みる
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    try:
-                        excel_success = generate_excel_download(processor, results, "Excelファイルのダウンロード")
-                        logging.info(f"Excel出力の結果: {'成功' if excel_success else '失敗'}")
-                    except Exception as excel_err:
-                        logging.error(f"Excel出力エラー: {str(excel_err)}")
-                        st.error(f"Excelファイルの生成に失敗しました: {str(excel_err)}")
-                
-                with col2:
-                    try:
-                        text_success = generate_text_download(processor, results, "テキストファイルのダウンロード")
-                        logging.info(f"テキスト出力の結果: {'成功' if text_success else '失敗'}")
-                    except Exception as text_err:
-                        logging.error(f"テキスト出力エラー: {str(text_err)}")
-                        st.error(f"テキストファイルの生成に失敗しました: {str(text_err)}")
-            else:
-                logging.error("プロセッサーがセッションにありません")
-                st.error("処理エンジンがセッションにありません。アプリを再読み込みしてください。")
-        except Exception as e:
-            logging.error(f"出力ファイル生成エラー: {str(e)}")
-            import traceback
-            logging.error(traceback.format_exc())
-            st.error(f"出力ファイル生成中にエラーが発生しました: {str(e)}")
-        
-        # 状態変更を確実に反映させるためrerun
+        # 画面を更新して結果表示画面に遷移
         st.rerun()
 
 def display_results(results):
