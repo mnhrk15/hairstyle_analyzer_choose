@@ -30,15 +30,17 @@ class ExcelExporter(ExcelExporterProtocol):
     Excel生成の基本機能、カスタムヘッダー設定、データ変換、スタイル適用などの機能が含まれます。
     """
     
-    def __init__(self, config: ExcelConfig):
+    def __init__(self, config: ExcelConfig, filename_mapping: Dict[str, str] = None):
         """
         初期化
         
         Args:
             config: Excel出力設定
+            filename_mapping: ファイル名のマッピング辞書（オプション）
         """
         self.logger = logging.getLogger(__name__)
         self.config = config
+        self.filename_mapping = filename_mapping or {}
     
     @with_error_handling(ExcelExportError, "Excel出力処理でエラーが発生しました")
     def export(self, results: List[ProcessResultProtocol], output_path: Union[str, Path]) -> Path:
@@ -276,11 +278,20 @@ class ExcelExporter(ExcelExporterProtocol):
                     row_height = min(15 * len(hashtags), 75)  # 1タグあたり15、最大75
                     sheet.row_dimensions[i].height = max(sheet.row_dimensions[i].height or 15, row_height)
                 
-                # I列: 画像ファイル名
+                # 画像ファイル名の取得と変換
                 if isinstance(result, dict):
-                    sheet[f"I{i}"] = result.get('image_name', '')
+                    image_name = result.get('image_name', '')
                 else:
-                    sheet[f"I{i}"] = getattr(result, 'image_name', '')
+                    image_name = getattr(result, 'image_name', '')
+
+                # ファイル名の変換（小文字で比較）
+                image_name_lower = image_name.lower()
+                if image_name_lower in self.filename_mapping:
+                    image_name = self.filename_mapping[image_name_lower]
+                    self.logger.info(f"ファイル名を変換: {image_name_lower} -> {image_name}")
+
+                # I列: 画像ファイル名
+                sheet[f"I{i}"] = image_name
             except Exception as e:
                 self.logger.error(f"Excelデータ追加エラー2 (行 {i}): {e}")
                 # エラーが発生しても続行するために空の値を設定
